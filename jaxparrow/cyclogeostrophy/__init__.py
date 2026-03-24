@@ -1,6 +1,5 @@
 from ._core import (
     CyclogeostrophyResult,
-    CyclogeostrophySetup,
     cyclogeostrophic_loss,
     cyclogeostrophic_imbalance,
 )
@@ -15,5 +14,4 @@ __all__ = [
     "cyclogeostrophic_loss",
     "cyclogeostrophic_imbalance",
     "CyclogeostrophyResult",
-    "CyclogeostrophySetup",
 ]
