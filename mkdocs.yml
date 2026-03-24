@@ -78,5 +78,7 @@ nav:
         - Pseudo-SWOT observations from eNATL60 model data: "examples/swot-enatl60.ipynb"
       - Application to operational SSH products:
         - DUACS: "examples/duacs.ipynb"
+      - Add regularization to the inversion problem: 
+        - Using SWOT data: "examples/swot_regularization.ipynb"
   - "api.md"
   - "faq.md"

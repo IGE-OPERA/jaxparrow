@@ -16,7 +16,7 @@ def geostrophy(
     land_mask: Float[jax.Array, "y x"] = None
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
     """
-    Computes the geostrophic Sea Surface Current (SSC) velocity field from a Sea Surface Height (SSH) field.
+    Computes the geostrophic velocity field from a Sea Surface Height (SSH) field.
 
     Parameters
     ----------
@@ -60,9 +60,6 @@ def _geostrophy(
     lon_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"]
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
-    """
-    Internal JIT-compiled geostrophy computation with curvilinear grid support.
-    """
     deta_e_t, deta_n_t = operators.horizontal_derivatives(ssh_t, lat=lat_t, lon=lon_t, land_mask=land_mask)
 
     f_t = geometry.coriolis_factor(lat_t)

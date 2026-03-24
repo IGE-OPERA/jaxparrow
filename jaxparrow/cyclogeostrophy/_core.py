@@ -13,31 +13,6 @@ from ..utils import geometry, operators, sanitize
 # =============================================================================
 
 class CyclogeostrophySetup(NamedTuple):
-    """
-    Contains precomputed values needed for cyclogeostrophic calculations.
-
-    Attributes
-    ----------
-    land_mask : Float[jax.Array, "y x"]
-        Land mask where `True`/`1` indicates land
-    ug_t : Float[jax.Array, "y x"]
-        $u$ component of geostrophic velocity, on the T grid
-    vg_t : Float[jax.Array, "y x"]
-        $v$ component of geostrophic velocity, on the T grid
-    dx_e_t : Float[jax.Array, "y x"]
-        Eastward displacement associated with one step in the x-index direction, on the T grid
-    dx_n_t : Float[jax.Array, "y x"]
-        Northward displacement associated with one step in the x-index direction, on the T grid
-    dy_e_t : Float[jax.Array, "y x"]
-        Eastward displacement associated with one step in the y-index direction, on the T grid
-    dy_n_t : Float[jax.Array, "y x"]
-        Northward displacement associated with one step in the y-index direction, on the T grid
-    J_t : Float[jax.Array, "y x"]
-        Jacobian of the transformation from grid to geographic coordinates, on the T grid
-    coriolis_factor_t : Float[jax.Array, "y x"]
-        Coriolis factor, on the T grid
-    """
-
     land_mask: Float[jax.Array, "y x"]
     ug_t: Float[jax.Array, "y x"]
     vg_t: Float[jax.Array, "y x"]
@@ -67,15 +42,18 @@ class CyclogeostrophyResult(NamedTuple):
         $u$ component of geostrophic velocity, on the T grid (if ``return_geos=True``)
     vg : Float[jax.Array, "y x"] | None
         $v$ component of geostrophic velocity, on the T grid (if ``return_geos=True``)
+    ssh : Float[jax.Array, "y x"] | None
+        Optimized SSH field, on the T grid (if SSH regularization was used)
     losses : Float[jax.Array, "n_it"] | None
         Cyclogeostrophic imbalance over iterations (if ``return_losses=True``)
     """
 
     ucg: Float[jax.Array, "y x"]
     vcg: Float[jax.Array, "y x"]
-    ug: Float[jax.Array, "y x"] | None = None
-    vg: Float[jax.Array, "y x"] | None = None
-    losses: Float[jax.Array, "n_it"] | None = None
+    ug: Float[jax.Array, "y x"] = None
+    vg: Float[jax.Array, "y x"] = None
+    ssh: Float[jax.Array, "y x"] = None
+    losses: Float[jax.Array, "n_it"] = None
 
 
 # =============================================================================
@@ -90,47 +68,6 @@ def setup_cyclogeostrophy(
     vg_t: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None
 ) -> CyclogeostrophySetup:
-    """
-    Computes all preliminary values needed for cyclogeostrophic calculations.
-
-    This includes: land mask, geostrophic velocities, U/V grids, spatial steps,
-    Coriolis factors, and grid rotation angles on all grids.
-
-    There are two modes of operation:
-
-    1. **SSH mode**: Provide ``lat_t``, ``lon_t``, ``ssh_t`` (and optionally ``mask``).
-       Geostrophic velocities will be computed from SSH
-
-    2. **Geostrophic mode**: Provide ``lat_t``, ``lon_t``, ``ug_t``, ``vg_t``
-       (and optionally ``land_mask``). Geostrophic velocities are provided on the T grid
-
-    Parameters
-    ----------
-    lat_t : Float[jax.Array, "y x"]
-        Latitudes of T grid.
-    lon_t : Float[jax.Array, "y x"]
-        Longitudes of T grid.
-    ssh_t : Float[jax.Array, "y x"], optional
-        SSH field on T grid. Required if geostrophic velocities are not provided.
-    ug_t : Float[jax.Array, "y x"], optional
-        U component of geostrophic velocity on T grid. If provided with ``vg_t``,
-        bypasses SSH-based computation. Will be interpolated to U grid.
-    vg_t : Float[jax.Array, "y x"], optional
-        V component of geostrophic velocity on T grid. If provided with ``ug_t``,
-        bypasses SSH-based computation. Will be interpolated to V grid.
-    land_mask : Float[jax.Array, "y x"], optional
-        Land mask where `1`/`True` is land. If None, inferred from ssh_t or ug_t nan values.
-
-    Returns
-    -------
-    CyclogeostrophySetup
-        Named tuple containing all precomputed values
-
-    Raises
-    ------
-    ValueError
-        If neither SSH nor geostrophic velocity inputs are provided.
-    """
     # Check if geostrophic velocities are provided directly
     use_geos_directly = ug_t is not None and vg_t is not None
 
@@ -172,41 +109,34 @@ def assemble_result(
     return_geos: bool = False,
     return_losses: bool = False,
     losses: Float[jax.Array, "n_it"] = None,
+    ssh_t: Float[jax.Array, "y x"] = None,
+    ug_t: Float[jax.Array, "y x"] = None,
+    vg_t: Float[jax.Array, "y x"] = None,
 ) -> CyclogeostrophyResult:
-    """
-    Assembles the final result, sanitizing outputs and including optional fields.
-
-    Parameters
-    ----------
-    ucg_t : Float[jax.Array, "y x"]
-        $u$ component of cyclogeostrophic velocity
-    vcg_t : Float[jax.Array, "y x"]
-        $v$ component of cyclogeostrophic velocity
-    setup : CyclogeostrophySetup
-        Precomputed setup values
-    return_geos : bool, optional
-        Include geostrophic velocities in result
-    return_grids : bool, optional
-        Include U/V grid coordinates in result
-    return_losses : bool, optional
-        Include losses in result
-    losses : Float[jax.Array, "n_it"], optional
-        Loss values from iterative methods
-
-    Returns
-    -------
-    CyclogeostrophyResult
-        Named tuple with computed velocities and optional fields
-    """
     # Handle masked data (set land cells to NaN)
     ucg_t = sanitize.sanitize_data(ucg_t, jnp.nan, setup.land_mask)
     vcg_t = sanitize.sanitize_data(vcg_t, jnp.nan, setup.land_mask)
 
+    if ssh_t is not None:
+        ssh_t = sanitize.sanitize_data(ssh_t, jnp.nan, setup.land_mask)
+
+    # Optimized ug/vg take precedence over setup values
+    if ug_t is not None:
+        ug_out = sanitize.sanitize_data(ug_t, jnp.nan, setup.land_mask)
+        vg_out = sanitize.sanitize_data(vg_t, jnp.nan, setup.land_mask)
+    elif return_geos:
+        ug_out = setup.ug_t
+        vg_out = setup.vg_t
+    else:
+        ug_out = None
+        vg_out = None
+
     return CyclogeostrophyResult(
         ucg=ucg_t,
         vcg=vcg_t,
-        ug=setup.ug_t if return_geos else None,
-        vg=setup.vg_t if return_geos else None,
+        ug=ug_out,
+        vg=vg_out,
+        ssh=ssh_t,
         losses=losses if return_losses else None,
     )
 
@@ -230,9 +160,9 @@ def cyclogeostrophic_loss(
     uv_on_t: bool = True
 ) -> Float[jax.Array, ""]:
     """
-    Computes the cyclogeostrophic imbalance loss from a geostrophic and a cyclogeostrophic velocity field.
+    Computes the cyclogeostrophic imbalance loss (a scalar) from a geostrophic and a cyclogeostrophic velocity field.
 
-    The velocity field can be provided either on the T grid (``uv_on_t=True``) or on the U/V grids (``uv_on_t=False``).
+    The velocity fields can be provided either on the T grid (``uv_on_t=True``) or on the U/V grids (``uv_on_t=False``).
 
     If provided, the ``lat_u``, ``lon_u``, ``lat_v``, and ``lon_v`` are expected to follow the NEMO convention.
 
@@ -308,9 +238,11 @@ def cyclogeostrophic_imbalance(
     uv_on_t: bool = True,
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
     """
-    Computes the cyclogeostrophic imbalance of a 2d velocity field.
+    Computes the cyclogeostrophic imbalance field from a geostrophic and a cyclogeostrophic velocity field.
 
-    The velocity fields can be provided either on the U and V grids (``vel_on_uv=True``) or on the T grid (``vel_on_uv=False``).
+    The velocity fields can be provided either on the T grid (``uv_on_t=True``) or on the U/V grids (``uv_on_t=False``).
+
+    If provided, the ``lat_u``, ``lon_u``, ``lat_v``, and ``lon_v`` are expected to follow the NEMO convention.
 
     Parameters
     ----------
@@ -397,6 +329,7 @@ def cyclogeostrophic_imbalance(
 # Internal Functions
 # =============================================================================
 
+
 def _cyclogeostrophic_loss(
     ug_t: Float[jax.Array, "y x"],
     vg_t: Float[jax.Array, "y x"],
@@ -464,9 +397,6 @@ def _u_advection(
     J_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"],
 ) -> Float[jax.Array, "y x"]:
-    """
-    Computes u * ∂u/∂x + v * ∂u/∂y
-    """
     du_e_t, du_n_t = operators.horizontal_derivatives(
         u_t, dx_e=dx_e_t, dx_n=dx_n_t, dy_e=dy_e_t, dy_n=dy_n_t, J=J_t, land_mask=land_mask
     )
@@ -486,9 +416,6 @@ def _v_advection(
     J_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"],
 ) -> Float[jax.Array, "y x"]:
-    """
-    Computes u * ∂v/∂x + v * ∂v/∂y
-    """
     dv_e_t, dv_n_t = operators.horizontal_derivatives(
         v_t, dx_e=dx_e_t, dx_n=dx_n_t, dy_e=dy_e_t, dy_n=dy_n_t, J=J_t, land_mask=land_mask
     )
