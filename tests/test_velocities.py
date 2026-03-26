@@ -11,7 +11,6 @@ class TestVelocities:
     def test_geostrophy(self):
         ug_est, vg_est = geostrophy(ssh_t=self.ssh, lat_t=self.lat, lon_t=self.lon, land_mask=self.land_mask)
         geos_rmse = self.compute_rmse(self.ug, self.vg, ug_est, vg_est)  # around 0.0004623004
-        print("Geos RMSE:", geos_rmse)
         assert geos_rmse < .0005
 
     def test_cyclogeostrophy_fixed_point(self):
@@ -21,8 +20,6 @@ class TestVelocities:
 
         ucg_est, vcg_est = res_fp.ucg, res_fp.vcg
         fp_rmse = self.compute_rmse(self.ucg, self.vcg, ucg_est, vcg_est)  # around 0.00035087694
-        print("FP RMSE:", fp_rmse)
-
         assert fp_rmse < .0004
 
     def test_cyclogeostrophy_gradient_wind(self):
@@ -32,8 +29,6 @@ class TestVelocities:
 
         ucg_est, vcg_est = res_gw.ucg, res_gw.vcg
         gw_rmse = self.compute_rmse(self.ucg, self.vcg, ucg_est, vcg_est)  # around 1.2627806e-05
-        print("GW RMSE:", gw_rmse)
-
         assert gw_rmse < 1.3e-5
 
     def test_cyclogeostrophy_minimization(self):
@@ -43,8 +38,6 @@ class TestVelocities:
 
         ucg_est, vcg_est = res_mb.ucg, res_mb.vcg
         mb_rmse = self.compute_rmse(self.ucg, self.vcg, ucg_est, vcg_est)  # around 6.180092e-05
-        print("MB RMSE:", mb_rmse)
-
         assert mb_rmse < 6.2e-5
 
     @staticmethod
