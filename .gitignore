@@ -10,12 +10,15 @@ dist
 *.egg-info
 junit
 docs/_build
+.coverage
+htmlcov
 
 # project specific
 notebooks/data/**
 
 # IDE related
 .idea
+.VSCodeCounter
 
 # git stuff
 !**/.gitkeep
