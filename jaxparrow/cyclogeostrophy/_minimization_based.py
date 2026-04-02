@@ -9,15 +9,11 @@ from jaxtyping import Float
 import optax
 
 from ._core import CyclogeostrophyResult, setup_cyclogeostrophy, assemble_result, _cyclogeostrophic_loss
-from ..utils import operators
-from ..utils.geometry import GRAVITY
 
 
 _SYSTEM_PARAMS = frozenset({
-    "ssh_t", "ug_t", "vg_t", "ucg_t", "vcg_t",
-    "lat_t", "lon_t",
-    "dx_e_t", "dx_n_t", "dy_e_t", "dy_n_t", "J_t",
-    "coriolis_factor_t", "land_mask",
+    "ucg_t", "vcg_t", "lat_t", "lon_t",
+    "dx_t", "dy_t", "coriolis_factor_t", "land_mask",
 })
 
 
@@ -28,6 +24,8 @@ def minimization_based(
     ug_t: Float[jax.Array, "y x"] = None,
     vg_t: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None,
+    is_grid_rectilinear: bool | None = None,
+    rotate_to_geographic: bool = True,
     return_geos: bool = False,
     return_losses: bool = False,
     n_it: int = 2000,
@@ -69,6 +67,20 @@ def minimization_based(
         If not provided, inferred from ``ssh_t`` or ``ug_t`` `nan` values
 
         Defaults to `None`
+    is_grid_rectilinear : bool, optional
+        If `True`, the grid is assumed to be rectilinear in geographic coordinates.
+        If `False`, the grid is assumed to be curvilinear and the grid angle is computed from the grid spacing. 
+        If `None`, the grid is assumed to be rectilinear if the grid angle computed from the grid spacing is close to zero everywhere, and curvilinear otherwise.
+
+        Defaults to `None`
+    rotate_to_geographic : bool, optional
+        If `True`, rotates the output velocities from grid-relative to geographic coordinates.
+        Rotation is performed using the grid angle computed from the grid spacing.
+        If `False`, output velocities are in grid-relative coordinates.
+
+        If using a rectilinear grid in geographic coordinates, set to `False` to avoid unnecessary rotation.
+
+        Defaults to `True`
     return_geos : bool, optional
         If `True`, returns the geostrophic SSC velocity field in addition to the cyclogeostrophic one.
 
@@ -98,21 +110,11 @@ def minimization_based(
         Defaults to `None`
     regularization : Callable, optional
         A regularization function added to the cyclogeostrophic loss at every iteration.
-        Its signature determines its behavior:
+        Its signature is defined as follows:
 
-        - Parameter names from ``{ssh_t, ug_t, vg_t, ucg_t, vcg_t, lat_t, lon_t,
-          dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t, coriolis_factor_t, land_mask}``
-          are automatically provided.
+        - Parameter names from ``{ucg_t, vcg_t, lat_t, lon_t, dx_t, dy_t, coriolis_factor_t, land_mask}`` are automatically provided,
+        but only ``ucg_t`` and ``vcg_t`` are required.
         - Any other parameter names must be provided via ``reg_kwargs``.
-        - If ``ssh_t`` is in the signature, the SSH field becomes an optimized parameter.
-          Gradients from the cyclogeostrophic imbalance are stopped w.r.t. SSH
-          (via ``jax.lax.stop_gradient``), so only the regularization term drives SSH updates.
-          Geostrophic velocities are recomputed from the (evolving) SSH at each iteration.
-          If ``ug_t``/``vg_t`` are also requested, they reflect the current SSH-derived values.
-        - If ``ug_t`` and/or ``vg_t`` are in the signature (without ``ssh_t``),
-          the geostrophic velocities become optimized parameters.
-          Gradients from the cyclogeostrophic imbalance are stopped w.r.t. ``ug``/``vg``,
-          so only the regularization term drives their updates.
 
         Must return a scalar.
 
@@ -134,7 +136,7 @@ def minimization_based(
         - ``losses``: Cyclogeostrophic imbalance per iteration (if ``return_losses=True``)
     """
     setup = setup_cyclogeostrophy(
-        lat_t, lon_t, ssh_t=ssh_t, ug_t=ug_t, vg_t=vg_t, land_mask=land_mask
+        lat_t, lon_t, ssh_t=ssh_t, ug_t=ug_t, vg_t=vg_t, land_mask=land_mask, is_grid_rectilinear=is_grid_rectilinear
     )
 
     if isinstance(optim, str):
@@ -146,36 +148,22 @@ def minimization_based(
             "optim should be an optax.GradientTransformation optimizer, or a string referring to such an optimizer."
         )
 
-    # Handle regularization and SSH/geos optimization
+    # Handle regularization
     reg_wrapper = None
-    optimize_ssh = False
-    optimize_geos = False
     if regularization is not None:
-        sig = inspect.signature(regularization)
-        reg_params = set(sig.parameters)
-        optimize_ssh = "ssh_t" in reg_params
-        optimize_geos = bool(reg_params & {"ug_t", "vg_t"}) and not optimize_ssh
-        if optimize_ssh and ssh_t is None:
-            raise ValueError(
-                "Regularization function requests ssh_t but no SSH field was provided. "
-                "Provide ssh_t to enable SSH optimization."
-            )
         reg_wrapper = _build_reg_wrapper(regularization, reg_kwargs)
 
-    ucg, vcg, opt_ssh, opt_ug, opt_vg, losses = _minimization_based(
+    ucg, vcg, losses = _minimization_based(
         setup.ug_t, setup.vg_t,
-        setup.dx_e_t, setup.dx_n_t, setup.dy_e_t, setup.dy_n_t, setup.J_t,
+        setup.dx_t, setup.dy_t,
         setup.coriolis_factor_t,
         setup.land_mask, n_it, optim,
         regularization=reg_wrapper, lat_t=lat_t, lon_t=lon_t,
-        ssh_t=ssh_t if optimize_ssh else None,
         reg_kwargs=reg_kwargs,
-        optimize_ssh=optimize_ssh, optimize_geos=optimize_geos,
     )
+
     return assemble_result(
-        ucg, vcg, setup,
-        return_geos=return_geos, return_losses=return_losses, losses=losses,
-        ssh_t=opt_ssh, ug_t=opt_ug, vg_t=opt_vg,
+        ucg, vcg, setup, rotate_to_geographic, return_geos, return_losses=return_losses, losses=losses,
     )
 
 
@@ -198,16 +186,16 @@ def _build_reg_wrapper(regularization, reg_kwargs):
                 f"not found in reg_kwargs. Available reg_kwargs keys: {list(reg_kwargs.keys())}"
             )
 
-    def wrapper(ucg_t, vcg_t, ssh_t, ug_t, vg_t, lat_t, lon_t,
-                dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t, coriolis_factor_t, land_mask,
-                reg_kwargs):
+    def wrapper(
+        ucg_t, vcg_t, lat_t, lon_t,
+        dx_t, dy_t, coriolis_factor_t, land_mask,
+        reg_kwargs
+    ):
         all_system = {
-            "ssh_t": ssh_t, "ug_t": ug_t, "vg_t": vg_t,
             "ucg_t": ucg_t, "vcg_t": vcg_t,
             "lat_t": lat_t, "lon_t": lon_t,
-            "dx_e_t": dx_e_t, "dx_n_t": dx_n_t,
-            "dy_e_t": dy_e_t, "dy_n_t": dy_n_t,
-            "J_t": J_t, "coriolis_factor_t": coriolis_factor_t, "land_mask": land_mask,
+            "dx_t": dx_t, "dy_t": dy_t,
+            "coriolis_factor_t": coriolis_factor_t, "land_mask": land_mask,
         }
         kwargs = {}
         for name in param_names:
@@ -220,15 +208,12 @@ def _build_reg_wrapper(regularization, reg_kwargs):
     return wrapper
 
 
-@partial(jax.jit, static_argnames=("n_it", "optim", "regularization", "optimize_ssh", "optimize_geos"))
+@partial(jax.jit, static_argnames=("n_it", "optim", "regularization"))
 def _minimization_based(
     ug_t: Float[jax.Array, "y x"],
     vg_t: Float[jax.Array, "y x"],
-    dx_e_t: Float[jax.Array, "y x"],
-    dx_n_t: Float[jax.Array, "y x"],
-    dy_e_t: Float[jax.Array, "y x"],
-    dy_n_t: Float[jax.Array, "y x"],
-    J_t: Float[jax.Array, "y x"],
+    dx_t: Float[jax.Array, "y x"],
+    dy_t: Float[jax.Array, "y x"],
     coriolis_factor_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"],
     n_it: int,
@@ -236,54 +221,23 @@ def _minimization_based(
     regularization: Callable = None,
     lat_t: Float[jax.Array, "y x"] = None,
     lon_t: Float[jax.Array, "y x"] = None,
-    ssh_t: Float[jax.Array, "y x"] = None,
     reg_kwargs: dict = None,
-    optimize_ssh: bool = False,
-    optimize_geos: bool = False,
 ):
     def loss_fn(args):
-        if optimize_ssh:
-            ucg, vcg, ssh = args
-            # Recompute geostrophic velocities from SSH;
-            ug_raw, vg_raw = _compute_geostrophy_from_grid_metrics(
-                ssh, dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t, land_mask, coriolis_factor_t
-            )
-            # stop_gradient on the result so only the regularization drives SSH updates
-            ug = jax.lax.stop_gradient(ug_raw)
-            vg = jax.lax.stop_gradient(vg_raw)
-            ug_reg, vg_reg = ug_raw, vg_raw
-        elif optimize_geos:
-            ucg, vcg, ug_opt, vg_opt = args
-            # stop_gradient so only the regularization drives ug/vg updates
-            ug = jax.lax.stop_gradient(ug_opt)
-            vg = jax.lax.stop_gradient(vg_opt)
-            ug_reg, vg_reg = ug_opt, vg_opt
-            ssh = None
-        else:
-            ucg, vcg = args
-            ug, vg = ug_t, vg_t
-            ug_reg, vg_reg = ug_t, vg_t
-            ssh = None
+        ucg, vcg = args
 
-        loss = _cyclogeostrophic_loss(
-            ug, vg, ucg, vcg, dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t, coriolis_factor_t, land_mask
-        )
+        loss = _cyclogeostrophic_loss(ug_t, vg_t, ucg, vcg, dx_t, dy_t, coriolis_factor_t, land_mask)
 
         if regularization is not None:
             loss += regularization(
-                ucg, vcg, ssh, ug_reg, vg_reg, lat_t, lon_t,
-                dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t, coriolis_factor_t, land_mask,
+                ucg, vcg, lat_t, lon_t,
+                dx_t, dy_t, coriolis_factor_t, land_mask,
                 reg_kwargs,
             )
 
         return loss
 
-    if optimize_ssh:
-        init_params = (ug_t, vg_t, ssh_t)
-    elif optimize_geos:
-        init_params = (ug_t, vg_t, ug_t, vg_t)
-    else:
-        init_params = (ug_t, vg_t)
+    init_params = (ug_t, vg_t)
 
     def step_fn(carry, _):
         params = carry[:-1]
@@ -297,26 +251,8 @@ def _minimization_based(
 
         return params + (opt_state,), loss
 
-    carry, losses = lax.scan(
-        step_fn, init_params + (optim.init(init_params),), xs=None, length=n_it
-    )
+    carry, losses = lax.scan(step_fn, init_params + (optim.init(init_params),), xs=None, length=n_it)
 
-    if optimize_ssh:
-        ucg, vcg, ssh = carry[:-1]
-        return ucg, vcg, ssh, None, None, losses
-    elif optimize_geos:
-        ucg, vcg, ug, vg = carry[:-1]
-        return ucg, vcg, None, ug, vg, losses
-    else:
-        ucg, vcg = carry[:-1]
-        return ucg, vcg, None, None, None, losses
+    ucg, vcg = carry[:-1]
 
-
-def _compute_geostrophy_from_grid_metrics(ssh, dx_e, dx_n, dy_e, dy_n, J, land_mask, coriolis_factor):
-    deta_e, deta_n = operators.horizontal_derivatives(
-        ssh, dx_e=dx_e, dx_n=dx_n,
-        dy_e=dy_e, dy_n=dy_n, J=J, land_mask=land_mask
-    )
-    ug = -GRAVITY * deta_n / coriolis_factor
-    vg = GRAVITY * deta_e / coriolis_factor
-    return ug, vg
+    return ucg, vcg, losses

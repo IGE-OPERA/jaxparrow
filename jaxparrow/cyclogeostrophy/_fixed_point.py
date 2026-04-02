@@ -17,6 +17,8 @@ def fixed_point(
     ug_t: Float[jax.Array, "y x"] = None,
     vg_t: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None,
+    is_grid_rectilinear: bool | None = None,
+    rotate_to_geographic: bool = True,
     return_geos: bool = False,
     return_losses: bool = False,
     n_it: int = 20,
@@ -58,6 +60,20 @@ def fixed_point(
         If not provided, inferred from ``ssh_t`` or ``ug_t`` `nan` values
 
         Defaults to `None`
+    is_grid_rectilinear : bool, optional
+        If `True`, the grid is assumed to be rectilinear in geographic coordinates.
+        If `False`, the grid is assumed to be curvilinear and the grid angle is computed from the grid spacing. 
+        If `None`, the grid is assumed to be rectilinear if the grid angle computed from the grid spacing is close to zero everywhere, and curvilinear otherwise.
+
+        Defaults to `None`
+    rotate_to_geographic : bool, optional
+        If `True`, rotates the output velocities from grid-relative to geographic coordinates.
+        Rotation is performed using the grid angle computed from the grid spacing.
+        If `False`, output velocities are in grid-relative coordinates.
+
+        If using a rectilinear grid in geographic coordinates, set to `False` to avoid unnecessary rotation.
+
+        Defaults to `True`
     return_geos : bool, optional
         If `True`, returns the geostrophic SSC velocity field in addition to the cyclogeostrophic one.
 
@@ -86,18 +102,18 @@ def fixed_point(
         - ``losses``: Cyclogeostrophic imbalance per iteration (if ``return_losses=True``)
     """
     setup = setup_cyclogeostrophy(
-        lat_t, lon_t, ssh_t=ssh_t, ug_t=ug_t, vg_t=vg_t, land_mask=land_mask
+        lat_t, lon_t, ssh_t=ssh_t, ug_t=ug_t, vg_t=vg_t, land_mask=land_mask, is_grid_rectilinear=is_grid_rectilinear
     )
 
     ucg, vcg, losses = _fixed_point(
         setup.ug_t, setup.vg_t,
-        setup.dx_e_t, setup.dx_n_t, setup.dy_e_t, setup.dy_n_t, setup.J_t,
+        setup.dx_t, setup.dy_t,
         setup.coriolis_factor_t,
         setup.land_mask, n_it, res_eps, return_losses
     )
 
     return assemble_result(
-        ucg, vcg, setup, return_geos=return_geos, return_losses=return_losses, losses=losses
+        ucg, vcg, setup, rotate_to_geographic, return_geos, return_losses=return_losses, losses=losses
     )
 
 
@@ -105,11 +121,8 @@ def fixed_point(
 def _fixed_point(
     ug_t: Float[jax.Array, "y x"],
     vg_t: Float[jax.Array, "y x"],
-    dx_e_t: Float[jax.Array, "y x"],
-    dx_n_t: Float[jax.Array, "y x"],
-    dy_e_t: Float[jax.Array, "y x"],
-    dy_n_t: Float[jax.Array, "y x"],
-    J_t: Float[jax.Array, "y x"],
+    dx_t: Float[jax.Array, "y x"],
+    dy_t: Float[jax.Array, "y x"],
     coriolis_factor_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"],
     n_it: int,
@@ -120,7 +133,7 @@ def _fixed_point(
     def step_fn(carry, _):
         return _fp_step(
             ug_t, vg_t,
-            dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t,
+            dx_t, dy_t,
             coriolis_factor_t,
             land_mask,
             res_eps, return_losses,
@@ -140,11 +153,8 @@ def _fixed_point(
 def _fp_step(
     ug_t: Float[jax.Array, "y x"],
     vg_t: Float[jax.Array, "y x"],
-    dx_e_t: Float[jax.Array, "y x"],
-    dx_n_t: Float[jax.Array, "y x"],
-    dy_e_t: Float[jax.Array, "y x"],
-    dy_n_t: Float[jax.Array, "y x"],
-    J_t: Float[jax.Array, "y x"],
+    dx_t: Float[jax.Array, "y x"],
+    dy_t: Float[jax.Array, "y x"],
     coriolis_factor_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"],
     res_eps: float,
@@ -161,13 +171,13 @@ def _fp_step(
     loss = lax.cond(
         return_losses,
         lambda: _cyclogeostrophic_loss(
-            ug_t, vg_t, u_n, v_n, dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t, coriolis_factor_t, land_mask
+            ug_t, vg_t, u_n, v_n, dx_t, dy_t, coriolis_factor_t, land_mask
         ),
         lambda: jnp.nan
     )
 
     # next it
-    u_adv, v_adv = _advection(u_n, v_n, dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t, land_mask)
+    u_adv, v_adv = _advection(u_n, v_n, dx_t, dy_t, land_mask)
     u_np1 = ug_t - jnp.nan_to_num(v_adv / coriolis_factor_t, copy=False, nan=0, posinf=0, neginf=0)
     v_np1 = vg_t + jnp.nan_to_num(u_adv / coriolis_factor_t, copy=False, nan=0, posinf=0, neginf=0)
 

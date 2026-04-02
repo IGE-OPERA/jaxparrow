@@ -31,6 +31,6 @@ jobs:
         python -m pip install pytest
         # install the package locally
         python -m pip install .
-    - name: Test with pytest
+    - name: Run tests
       run: |
-        pytest tests/test_velocities.py --doctest-modules --junitxml=junit/test-results.xml
+        pytest tests/ --doctest-modules --junitxml=junit/test-results.xml

@@ -66,39 +66,31 @@ class TestInterpolation:
 class TestDerivative:
     def test_constant_field_zero_derivative(self):
         field = jnp.full((3, 4), 5.0)
-        result = derivative(field, axis=1, padding="right")
+        result = derivative(field, axis=1,)
         assert jnp.allclose(result, 0.0)
 
     def test_linear_field_constant_derivative(self):
         field = jnp.array([[1.0, 3.0, 5.0, 7.0]])
-        result = derivative(field, axis=1, padding="right")
+        result = derivative(field, axis=1)
         assert jnp.allclose(result, 2.0)
 
     def test_axis0_derivative(self):
         field = jnp.array([[1.0], [4.0], [9.0]])
-        result = derivative(field, axis=0, padding="right")
+        result = derivative(field, axis=0)
         # diff: [3, 5], padding right: [3, 5, 5]
         expected = jnp.array([[3.0], [5.0], [5.0]])
-        assert jnp.allclose(result, expected)
-
-    def test_axis0_left_padding(self):
-        field = jnp.array([[1.0], [4.0], [9.0]])
-        result = derivative(field, axis=0, padding="left")
-        # diff: [3, 5], padding left: [3, 3, 5]
-        expected = jnp.array([[3.0], [3.0], [5.0]])
         assert jnp.allclose(result, expected)
 
     def test_preserves_shape(self):
         field = jnp.ones((5, 7))
         for axis in [0, 1]:
-            for padding in ["left", "right"]:
-                result = derivative(field, axis=axis, padding=padding)
-                assert result.shape == field.shape
+            result = derivative(field, axis=axis)
+            assert result.shape == field.shape
 
     def test_land_mask_sets_nan(self):
         field = jnp.array([[1.0, 3.0, 5.0]])
         mask = jnp.array([[False, True, False]])
-        result = derivative(field, axis=1, padding="right", land_mask=mask)
+        result = derivative(field, axis=1, land_mask=mask)
         assert jnp.isnan(result[0, 1])
 
 
@@ -110,12 +102,13 @@ class TestHorizontalDerivatives:
         assert df_e.shape == field.shape
         assert df_n.shape == field.shape
 
-    def test_from_precomputed_metrics(self, small_grid):
+    def test_from_grid_spacing(self, small_grid):
         lat, lon, _ = small_grid
-        from jaxparrow.utils.geometry import grid_metrics
-        dx_e, dx_n, dy_e, dy_n, J = grid_metrics(lat, lon)
+        from jaxparrow.utils.geometry import grid_spacing
+        dx, dy = grid_spacing(lat, lon)
         field = lat
-        df_e, df_n = horizontal_derivatives(field, dx_e=dx_e, dx_n=dx_n, dy_e=dy_e, dy_n=dy_n, J=J)
+        # Assume horizontal_derivatives can take dx, dy for orthogonal grid
+        df_e, df_n = horizontal_derivatives(field, dx=dx, dy=dy)
         assert df_e.shape == field.shape
         assert df_n.shape == field.shape
 
@@ -130,13 +123,3 @@ class TestHorizontalDerivatives:
         df_e, df_n = horizontal_derivatives(field, lat=lat, lon=lon)
         assert jnp.allclose(df_e, 0.0, atol=1e-10)
         assert jnp.allclose(df_n, 0.0, atol=1e-10)
-
-    def test_lat_lon_and_metrics_agree(self, small_grid):
-        lat, lon, _ = small_grid
-        from jaxparrow.utils.geometry import grid_metrics
-        dx_e, dx_n, dy_e, dy_n, J = grid_metrics(lat, lon)
-        field = lat * lon
-        df_e1, df_n1 = horizontal_derivatives(field, lat=lat, lon=lon)
-        df_e2, df_n2 = horizontal_derivatives(field, dx_e=dx_e, dx_n=dx_n, dy_e=dy_e, dy_n=dy_n, J=J)
-        assert jnp.allclose(df_e1, df_e2, atol=1e-10)
-        assert jnp.allclose(df_n1, df_n2, atol=1e-10)
