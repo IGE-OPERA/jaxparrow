@@ -13,7 +13,9 @@ def geostrophy(
     ssh_t: Float[jax.Array, "y x"],
     lat_t: Float[jax.Array, "y x"],
     lon_t: Float[jax.Array, "y x"],
-    land_mask: Float[jax.Array, "y x"] = None
+    land_mask: Float[jax.Array, "y x"] = None,
+    is_grid_rectilinear: bool | None = None,
+    rotate_to_geographic: bool = True
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
     """
     Computes the geostrophic velocity field from a Sea Surface Height (SSH) field.
@@ -30,6 +32,17 @@ def geostrophy(
         Mask defining the marine area of the spatial domain; `1` or `True` stands for masked (i.e. land).
 
         Defaults to `None`, in which case inferred from `ssh_t` `nan` values
+    is_grid_rectilinear : bool, optional
+        If `True`, the grid is assumed to be rectilinear in geographic coordinates.
+        If `False`, the grid is assumed to be curvilinear and the grid angle is computed from the grid spacing. 
+        If `None`, the grid is assumed to be rectilinear if the grid angle computed from the grid spacing is close to zero everywhere, and curvilinear otherwise.
+
+        Defaults to `None`
+    rotate_to_geographic : bool, optional
+        If `True`, rotates the velocity field to geographic coordinates (eastward and northward components).
+
+        Defaults to `True`, in which case the returned velocity components are in geographic coordinates. 
+        If `False`, the returned velocity components are in grid coordinates (i.e. along the grid axes, which may not be aligned with geographic east and north directions).
 
     Returns
     -------
@@ -50,6 +63,18 @@ def geostrophy(
     ug_t = sanitize.sanitize_data(ug_t, jnp.nan, land_mask)
     vg_t = sanitize.sanitize_data(vg_t, jnp.nan, land_mask)
 
+    if rotate_to_geographic:
+        grid_angle = None
+        if is_grid_rectilinear is None:
+            # determine if the grid is rectilinear by checking the grid angle
+            grid_angle = geometry.compute_grid_angle(lat_t, lon_t)
+            is_grid_rectilinear = jnp.all(jnp.abs(grid_angle) < 1e-3)
+        
+        if not is_grid_rectilinear:
+            if grid_angle is None:
+                grid_angle = geometry.compute_grid_angle(lat_t, lon_t)
+            ug_t, vg_t = geometry.rotate_to_geographic(ug_t, vg_t, grid_angle)
+
     return ug_t, vg_t
 
 
@@ -60,14 +85,14 @@ def _geostrophy(
     lon_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"]
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
-    deta_e_t, deta_n_t = operators.horizontal_derivatives(ssh_t, lat=lat_t, lon=lon_t, land_mask=land_mask)
+    deta_x_t, deta_y_t = operators.horizontal_derivatives(ssh_t, lat=lat_t, lon=lon_t, land_mask=land_mask)
 
     f_t = geometry.coriolis_factor(lat_t)
 
     # Computing the geostrophic velocities
-    # u = -g/f * dη/dn  (eastward velocity)
-    # v =  g/f * dη/de  (northward velocity)
-    ug_t = -geometry.GRAVITY * deta_n_t / f_t
-    vg_t = geometry.GRAVITY * deta_e_t / f_t
+    # u = -g/f * dη/dy
+    # v =  g/f * dη/dx
+    ug_t = -geometry.GRAVITY * deta_y_t / f_t
+    vg_t = geometry.GRAVITY * deta_x_t / f_t
 
     return ug_t, vg_t

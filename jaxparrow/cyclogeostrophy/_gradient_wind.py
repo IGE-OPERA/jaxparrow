@@ -15,6 +15,8 @@ def gradient_wind(
     ug_t: Float[jax.Array, "y x"] = None,
     vg_t: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None,
+    is_grid_rectilinear: bool | None = None,
+    rotate_to_geographic: bool = True,
     return_geos: bool = False
 ) -> CyclogeostrophyResult:
     """
@@ -53,6 +55,20 @@ def gradient_wind(
         If not provided, inferred from ``ssh_t`` or ``ug_t`` `nan` values
 
         Defaults to `None`
+    is_grid_rectilinear : bool, optional
+        If `True`, the grid is assumed to be rectilinear in geographic coordinates.
+        If `False`, the grid is assumed to be curvilinear and the grid angle is computed from the grid spacing. 
+        If `None`, the grid is assumed to be rectilinear if the grid angle computed from the grid spacing is close to zero everywhere, and curvilinear otherwise.
+
+        Defaults to `None`
+    rotate_to_geographic : bool, optional
+        If `True`, rotates the output velocities from grid-relative to geographic coordinates.
+        Rotation is performed using the grid angle computed from the grid spacing.
+        If `False`, output velocities are in grid-relative coordinates.
+
+        If using a rectilinear grid in geographic coordinates, set to `False` to avoid unnecessary rotation.
+
+        Defaults to `True`
     return_geos : bool, optional
         If `True`, returns the geostrophic SSC velocity field in addition to the cyclogeostrophic one.
 
@@ -67,32 +83,29 @@ def gradient_wind(
         - ``ug``, ``vg``: Geostrophic velocities (if ``return_geos=True``)
     """
     setup = setup_cyclogeostrophy(
-        lat_t, lon_t, ssh_t=ssh_t, ug_t=ug_t, vg_t=vg_t, land_mask=land_mask
+        lat_t, lon_t, ssh_t=ssh_t, ug_t=ug_t, vg_t=vg_t, land_mask=land_mask, is_grid_rectilinear=is_grid_rectilinear
     )
 
     ucg, vcg = _gradient_wind(
         setup.ug_t, setup.vg_t,
-        setup.dx_e_t, setup.dx_n_t, setup.dy_e_t, setup.dy_n_t, setup.J_t,
+        setup.dx_t, setup.dy_t, 
         setup.coriolis_factor_t, 
         setup.land_mask
     )
 
-    return assemble_result(ucg, vcg, setup, return_geos=return_geos)
+    return assemble_result(ucg, vcg, setup, rotate_to_geographic, return_geos)
 
 
 @jax.jit
 def _gradient_wind(
     ug_t: Float[jax.Array, "y x"],
     vg_t: Float[jax.Array, "y x"],
-    dx_e_t: Float[jax.Array, "y x"],
-    dx_n_t: Float[jax.Array, "y x"],
-    dy_e_t: Float[jax.Array, "y x"],
-    dy_n_t: Float[jax.Array, "y x"],
-    J_t: Float[jax.Array, "y x"],
+    dx_t: Float[jax.Array, "y x"],
+    dy_t: Float[jax.Array, "y x"],
     coriolis_factor_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"]
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
-    R = kinematics._radius_of_curvature(ug_t, vg_t, dx_e_t, dx_n_t, dy_e_t, dy_n_t, J_t, land_mask)
+    R = kinematics._radius_of_curvature(ug_t, vg_t, dx_t, dy_t, land_mask)
 
     V_g = kinematics.magnitude(ug_t, vg_t, land_mask, uv_on_t=True)
     V_gr = 2 * V_g / (1 + jnp.sqrt(1 + 4 * V_g / (coriolis_factor_t * R)))

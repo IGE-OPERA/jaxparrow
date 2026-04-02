@@ -1,7 +1,8 @@
 import jax.numpy as jnp
 
 from jaxparrow.utils.geometry import (
-    coriolis_factor, grid_metrics, compute_uv_grids, EARTH_ANG_SPEED
+    coriolis_factor, compute_uv_grids, compute_grid_angle,
+    EARTH_ANG_SPEED, grid_spacing, rotate_to_geographic, rotate_to_grid
 )
 
 
@@ -38,41 +39,42 @@ class TestCoriolisFactory:
         assert f.shape == (3, 5)
 
 
-class TestGridMetrics:
+class TestGridSpacing:
     def test_output_shapes(self, small_grid):
         lat, lon, _ = small_grid
-        dx_e, dx_n, dy_e, dy_n, J = grid_metrics(lat, lon)
-        assert dx_e.shape == lat.shape
-        assert dx_n.shape == lat.shape
-        assert dy_e.shape == lat.shape
-        assert dy_n.shape == lat.shape
-        assert J.shape == lat.shape
+        dx, dy = grid_spacing(lat, lon)
+        assert dx.shape == lat.shape
+        assert dy.shape == lat.shape
 
-    def test_regular_grid_dominant_components(self, small_grid):
+    def test_physical_range(self, small_grid):
         lat, lon, _ = small_grid
-        dx_e, dx_n, dy_e, dy_n, _ = grid_metrics(lat, lon)
-        # For a regular lat/lon grid:
-        # stepping in x (lon) -> mostly eastward: |dx_e| >> |dx_n|
-        # stepping in y (lat) -> mostly northward: |dy_n| >> |dy_e|
+        dx, dy = grid_spacing(lat, lon)
         inner = slice(1, -1), slice(1, -1)
-        assert jnp.abs(dx_e[inner]).mean() > jnp.abs(dx_n[inner]).mean() * 10
-        assert jnp.abs(dy_n[inner]).mean() > jnp.abs(dy_e[inner]).mean() * 10
+        # 1 degree ~ 111 km, grid ~0.11 deg -> ~12 km
+        assert jnp.abs(dx[inner]).mean() > 5000
+        assert jnp.abs(dx[inner]).mean() < 20000
+        assert jnp.abs(dy[inner]).mean() > 5000
+        assert jnp.abs(dy[inner]).mean() < 20000
 
-    def test_positive_jacobian(self, small_grid):
-        lat, lon, _ = small_grid
-        _, _, _, _, J = grid_metrics(lat, lon)
-        assert (J > 0).all()
 
-    def test_displacements_in_meters(self, small_grid):
-        lat, lon, _ = small_grid
-        dx_e, _, _, dy_n, _ = grid_metrics(lat, lon)
-        # 1° of latitude ~ 111 km, grid spacing ~ 0.11° -> ~ 12 km
-        # 1° of longitude at 36°N ~ 90 km, grid spacing ~ 0.11° -> ~ 10 km
-        inner = slice(1, -1), slice(1, -1)
-        assert jnp.abs(dx_e[inner]).mean() > 5000   # > 5 km
-        assert jnp.abs(dx_e[inner]).mean() < 20000  # < 20 km
-        assert jnp.abs(dy_n[inner]).mean() > 5000
-        assert jnp.abs(dy_n[inner]).mean() < 20000
+class TestRotateToGeographic:
+    def test_identity_rotation(self):
+        # grid_angle = 0, so output == input
+        u = jnp.ones((3, 3))
+        v = jnp.zeros((3, 3))
+        angle = jnp.zeros((3, 3))
+        ue, vn = rotate_to_geographic(u, v, angle)
+        assert jnp.allclose(ue, u)
+        assert jnp.allclose(vn, v)
+
+    def test_90deg_rotation(self):
+        # grid_angle = pi/2, so u becomes -v, v becomes u
+        u = jnp.ones((2, 2))
+        v = jnp.zeros((2, 2))
+        angle = jnp.ones((2, 2)) * (jnp.pi / 2)
+        ue, vn = rotate_to_geographic(u, v, angle)
+        assert jnp.allclose(ue, 0.0, atol=1e-7)
+        assert jnp.allclose(vn, u, atol=1e-7)
 
 
 class TestComputeUVGrids:
@@ -107,3 +109,52 @@ class TestComputeUVGrids:
         # Last row of V grid extrapolated: 2*T[-1] - T[-2]
         expected_lat_v_last = 2 * lat[-1, :] - lat[-2, :]
         assert jnp.allclose(lat_v[-1, :], expected_lat_v_last)
+
+
+class TestComputeGridAngle:
+    def test_rectilinear_grid_near_zero(self, small_grid):
+        lat, lon, _ = small_grid
+        angle = compute_grid_angle(lat, lon)
+        # A regular lat/lon grid has i-axis pointing east → angle close to 0
+        assert jnp.allclose(angle, 0.0, atol=2e-3)
+
+    def test_output_shape(self, small_grid):
+        lat, lon, _ = small_grid
+        angle = compute_grid_angle(lat, lon)
+        assert angle.shape == lat.shape
+
+    def test_range(self, small_grid):
+        lat, lon, _ = small_grid
+        angle = compute_grid_angle(lat, lon)
+        assert (angle >= -jnp.pi).all()
+        assert (angle <= jnp.pi).all()
+
+
+class TestRotateToGrid:
+    def test_roundtrip(self):
+        u = jnp.array([[1.0, 2.0], [3.0, 4.0]])
+        v = jnp.array([[0.5, -0.5], [1.0, -1.0]])
+        angle = jnp.ones((2, 2)) * (jnp.pi / 4)
+        ue, vn = rotate_to_geographic(u, v, angle)
+        u_rec, v_rec = rotate_to_grid(ue, vn, angle)
+        assert jnp.allclose(u_rec, u, atol=1e-6)
+        assert jnp.allclose(v_rec, v, atol=1e-6)
+
+    def test_90deg_rotation(self):
+        u = jnp.ones((2, 2))
+        v = jnp.zeros((2, 2))
+        angle = jnp.ones((2, 2)) * (jnp.pi / 2)
+        # rotate_to_grid: u_grid = u*cos + v*sin, v_grid = -u*sin + v*cos
+        # with cos=0, sin=1: u_grid = 0, v_grid = -u = -1
+        ug, vg = rotate_to_grid(u, v, angle)
+        assert jnp.allclose(ug, 0.0, atol=1e-7)
+        assert jnp.allclose(vg, -u, atol=1e-7)
+
+    def test_inverse_of_rotate_to_geographic(self):
+        u = jnp.array([[1.0, 0.0]])
+        v = jnp.array([[0.0, 1.0]])
+        angle = jnp.array([[jnp.pi / 3, jnp.pi / 6]])
+        ue, vn = rotate_to_geographic(u, v, angle)
+        u_back, v_back = rotate_to_grid(ue, vn, angle)
+        assert jnp.allclose(u_back, u, atol=1e-6)
+        assert jnp.allclose(v_back, v, atol=1e-6)

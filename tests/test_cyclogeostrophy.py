@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import optax
 import pytest
@@ -6,6 +7,10 @@ from jaxparrow import fixed_point, geostrophy, gradient_wind, minimization_based
 from jaxparrow.cyclogeostrophy import (
     CyclogeostrophyResult, cyclogeostrophic_loss, cyclogeostrophic_imbalance
 )
+from jaxparrow.utils.geometry import compute_grid_angle, rotate_to_geographic
+
+
+jax.config.update("jax_enable_x64", True)
 
 
 class TestCyclogeostrophyResult:
@@ -15,7 +20,6 @@ class TestCyclogeostrophyResult:
         result = CyclogeostrophyResult(ucg=ucg, vcg=vcg)
         assert result.ug is None
         assert result.vg is None
-        assert result.ssh is None
         assert result.losses is None
 
     def test_named_access(self):
@@ -34,10 +38,8 @@ class TestCyclogeostrophyResult:
         vcg = jnp.zeros((2, 2))
         ug = jnp.ones((2, 2))
         vg = jnp.ones((2, 2))
-        ssh = jnp.ones((2, 2)) * -0.1
         losses = jnp.array([1.0, 0.5, 0.1])
-        result = CyclogeostrophyResult(ucg=ucg, vcg=vcg, ug=ug, vg=vg, ssh=ssh, losses=losses)
-        assert result.ssh is not None
+        result = CyclogeostrophyResult(ucg=ucg, vcg=vcg, ug=ug, vg=vg, losses=losses)
         assert result.losses is not None
         assert result.losses.shape == (3,)
 
@@ -125,6 +127,20 @@ class TestFixedPoint:
         with pytest.raises(ValueError):
             fixed_point(lat, lon, land_mask=mask)
 
+    def test_rotate_to_geographic_true_vs_false_curvilinear(self, small_curvilinear_grid):
+        lat, lon, mask = small_curvilinear_grid
+        # Recompute gaussian_ssh for this grid
+        R = jnp.sqrt((lat - 36.0) ** 2 + (lon + 4.5) ** 2)
+        ssh = -0.2 * jnp.exp(-(R / 0.3) ** 2)
+        result_geo = fixed_point(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=True)
+        result_grid = fixed_point(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=False)
+        # Should differ for curvilinear grid
+        assert not jnp.allclose(result_geo.ucg, result_grid.ucg) or not jnp.allclose(result_geo.vcg, result_grid.vcg)
+        angle = compute_grid_angle(lat, lon)
+        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle)
+        assert jnp.allclose(result_geo.ucg, ucg_geo2, atol=1e-6)
+        assert jnp.allclose(result_geo.vcg, vcg_geo2, atol=1e-6)
+
     def test_return_geos(self, small_grid, gaussian_ssh):
         lat, lon, mask = small_grid
         result = fixed_point(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, return_geos=True)
@@ -145,6 +161,34 @@ class TestFixedPoint:
         assert result.vg is None
         assert result.losses is None
 
+    def test_rotate_to_geographic_false(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        # Force rectilinear so rotation is identity; True vs False should give identical outputs
+        r_geo = fixed_point(lat, lon, ssh_t=gaussian_ssh, land_mask=mask,
+                            is_grid_rectilinear=True, rotate_to_geographic=True)
+        r_grid = fixed_point(lat, lon, ssh_t=gaussian_ssh, land_mask=mask,
+                             is_grid_rectilinear=True, rotate_to_geographic=False)
+        assert jnp.allclose(r_geo.ucg, r_grid.ucg, equal_nan=True)
+
+    def test_is_grid_rectilinear_true(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        result = fixed_point(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, is_grid_rectilinear=True)
+        assert result.ucg.shape == lat.shape
+        assert not jnp.all(jnp.isnan(result.ucg))
+
+    def test_is_grid_rectilinear_false_with_ssh(self, small_grid, gaussian_ssh):
+        # Forces curvilinear code path (angle≈0 on rectilinear grid → rotation ≈ identity)
+        lat, lon, mask = small_grid
+        result = fixed_point(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, is_grid_rectilinear=False)
+        assert result.ucg.shape == lat.shape
+
+    def test_is_grid_rectilinear_false_with_ug_vg(self, small_grid, gaussian_ssh):
+        # Exercises the path in setup_cyclogeostrophy that rotates ug/vg to grid coordinates
+        lat, lon, mask = small_grid
+        ug, vg = geostrophy(gaussian_ssh, lat, lon, land_mask=mask)
+        result = fixed_point(lat, lon, ug_t=ug, vg_t=vg, land_mask=mask, is_grid_rectilinear=False)
+        assert result.ucg.shape == lat.shape
+
 
 class TestGradientWind:
     def test_from_ssh(self, small_grid, gaussian_ssh):
@@ -164,6 +208,20 @@ class TestGradientWind:
         with pytest.raises(ValueError):
             gradient_wind(lat, lon, land_mask=mask)
 
+    def test_rotate_to_geographic_true_vs_false_curvilinear(self, small_curvilinear_grid):
+        lat, lon, mask = small_curvilinear_grid
+        # Recompute gaussian_ssh for this grid
+        R = jnp.sqrt((lat - 36.0) ** 2 + (lon + 4.5) ** 2)
+        ssh = -0.2 * jnp.exp(-(R / 0.3) ** 2)
+        result_geo = gradient_wind(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=True)
+        result_grid = gradient_wind(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=False)
+        # Should differ for curvilinear grid
+        assert not jnp.allclose(result_geo.ucg, result_grid.ucg) or not jnp.allclose(result_geo.vcg, result_grid.vcg)
+        angle = compute_grid_angle(lat, lon)
+        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle)
+        assert jnp.allclose(result_geo.ucg, ucg_geo2, atol=1e-6)
+        assert jnp.allclose(result_geo.vcg, vcg_geo2, atol=1e-6)
+
     def test_return_geos(self, small_grid, gaussian_ssh):
         lat, lon, mask = small_grid
         result = gradient_wind(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, return_geos=True)
@@ -175,6 +233,32 @@ class TestGradientWind:
         result = gradient_wind(lat, lon, ssh_t=gaussian_ssh, land_mask=mask)
         assert result.ug is None
         assert result.vg is None
+
+    def test_rotate_to_geographic_false(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        # Force rectilinear so rotation is identity; True vs False should give identical outputs
+        r_geo = gradient_wind(lat, lon, ssh_t=gaussian_ssh, land_mask=mask,
+                              is_grid_rectilinear=True, rotate_to_geographic=True)
+        r_grid = gradient_wind(lat, lon, ssh_t=gaussian_ssh, land_mask=mask,
+                               is_grid_rectilinear=True, rotate_to_geographic=False)
+        assert jnp.allclose(r_geo.ucg, r_grid.ucg, equal_nan=True)
+
+    def test_is_grid_rectilinear_true(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        result = gradient_wind(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, is_grid_rectilinear=True)
+        assert result.ucg.shape == lat.shape
+        assert not jnp.all(jnp.isnan(result.ucg))
+
+    def test_is_grid_rectilinear_false_with_ssh(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        result = gradient_wind(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, is_grid_rectilinear=False)
+        assert result.ucg.shape == lat.shape
+
+    def test_is_grid_rectilinear_false_with_ug_vg(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        ug, vg = geostrophy(gaussian_ssh, lat, lon, land_mask=mask)
+        result = gradient_wind(lat, lon, ug_t=ug, vg_t=vg, land_mask=mask, is_grid_rectilinear=False)
+        assert result.ucg.shape == lat.shape
 
 
 class TestMinimizationBased:
@@ -194,6 +278,20 @@ class TestMinimizationBased:
         lat, lon, mask = small_grid
         with pytest.raises(ValueError):
             minimization_based(lat, lon, land_mask=mask, n_it=10)
+
+    def test_rotate_to_geographic_true_vs_false_curvilinear(self, small_curvilinear_grid):
+        lat, lon, mask = small_curvilinear_grid
+        # Recompute gaussian_ssh for this grid
+        R = jnp.sqrt((lat - 36.0) ** 2 + (lon + 4.5) ** 2)
+        ssh = -0.2 * jnp.exp(-(R / 0.3) ** 2)
+        result_geo = minimization_based(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=True, n_it=10)
+        result_grid = minimization_based(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=False, n_it=10)
+        # Should differ for curvilinear grid
+        assert not jnp.allclose(result_geo.ucg, result_grid.ucg) or not jnp.allclose(result_geo.vcg, result_grid.vcg)
+        angle = compute_grid_angle(lat, lon)
+        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle)
+        assert jnp.allclose(result_geo.ucg, ucg_geo2, atol=1e-6)
+        assert jnp.allclose(result_geo.vcg, vcg_geo2, atol=1e-6)
 
     def test_return_geos(self, small_grid, gaussian_ssh):
         lat, lon, mask = small_grid
@@ -236,6 +334,33 @@ class TestMinimizationBased:
         assert result.vg is None
         assert result.losses is None
 
+    def test_rotate_to_geographic_false(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        # Force rectilinear so rotation is identity; True vs False should give identical outputs
+        r_geo = minimization_based(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, n_it=10,
+                                   is_grid_rectilinear=True, rotate_to_geographic=True)
+        r_grid = minimization_based(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, n_it=10,
+                                    is_grid_rectilinear=True, rotate_to_geographic=False)
+        assert jnp.allclose(r_geo.ucg, r_grid.ucg, equal_nan=True)
+
+    def test_is_grid_rectilinear_true(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        result = minimization_based(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, n_it=10,
+                                    is_grid_rectilinear=True)
+        assert result.ucg.shape == lat.shape
+        assert not jnp.all(jnp.isnan(result.ucg))
+
+    def test_is_grid_rectilinear_false_with_ssh(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        result = minimization_based(lat, lon, ssh_t=gaussian_ssh, land_mask=mask, n_it=10, is_grid_rectilinear=False)
+        assert result.ucg.shape == lat.shape
+
+    def test_is_grid_rectilinear_false_with_ug_vg(self, small_grid, gaussian_ssh):
+        lat, lon, mask = small_grid
+        ug, vg = geostrophy(gaussian_ssh, lat, lon, land_mask=mask)
+        result = minimization_based(lat, lon, ug_t=ug, vg_t=vg, land_mask=mask, n_it=10, is_grid_rectilinear=False)
+        assert result.ucg.shape == lat.shape
+
     def test_regularization_system_params_only(self, small_grid, gaussian_ssh):
         lat, lon, mask = small_grid
 
@@ -258,33 +383,6 @@ class TestMinimizationBased:
             regularization=reg, reg_kwargs={"alpha": jnp.array(0.01)}
         )
         assert result.ucg.shape == lat.shape
-
-    def test_regularization_ssh_optimization(self, small_grid, gaussian_ssh):
-        lat, lon, mask = small_grid
-
-        def reg(ssh_t):
-            return jnp.sum(ssh_t ** 2) * 0.01
-
-        result = minimization_based(
-            lat, lon, ssh_t=gaussian_ssh, land_mask=mask, n_it=10, regularization=reg
-        )
-        assert result.ucg.shape == lat.shape
-        assert result.ssh is not None
-        assert result.ssh.shape == lat.shape
-
-    def test_regularization_geos_optimization(self, small_grid, gaussian_ssh):
-        lat, lon, mask = small_grid
-
-        def reg(ug_t, vg_t):
-            return jnp.sum(ug_t ** 2 + vg_t ** 2) * 0.01
-
-        ug, vg = geostrophy(gaussian_ssh, lat, lon, land_mask=mask)
-        result = minimization_based(
-            lat, lon, ug_t=ug, vg_t=vg, land_mask=mask, n_it=10, regularization=reg
-        )
-        assert result.ucg.shape == lat.shape
-        assert result.ug is not None
-        assert result.vg is not None
 
     def test_regularization_ssh_without_ssh_raises(self, small_grid, gaussian_ssh):
         lat, lon, mask = small_grid

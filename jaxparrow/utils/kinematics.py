@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Float
 
-from .geometry import coriolis_factor, grid_metrics
+from .geometry import coriolis_factor, grid_spacing
 from .operators import horizontal_derivatives, interpolation
 from .sanitize import init_land_mask, sanitize_data
 
@@ -36,9 +36,9 @@ def setup_kinematics(
             raise ValueError("Either lat_t and lon_t, or lat_u, lon_u, lat_v, and lon_v must be provided")
     
     # compute grid metrics once
-    dx_e, dx_n, dy_e, dy_n, J = grid_metrics(lat_t, lon_t)
+    dx, dy = grid_spacing(lat_t, lon_t)
 
-    return u, v, lat_t, lon_t, dx_e, dx_n, dy_e, dy_n, J, land_mask
+    return u, v, lat_t, lon_t, dx, dy, land_mask
 
 
 def magnitude(
@@ -203,14 +203,14 @@ def vorticity(
     vorticity : Float[jax.Array, "y x"]
         The vorticity on the T grid, normalized by the Coriolis factor if ``normalize_by_coriolis=True``
     """
-    u, v, lat_t, lon_t, dx_e, dx_n, dy_e, dy_n, J, land_mask = setup_kinematics(
+    u, v, lat_t, lon_t, dx, dy, land_mask = setup_kinematics(
         u, v, lat_t, lon_t, lat_u, lon_u, lat_v, lon_v, land_mask, uv_on_t
     )
 
-    _, du_n = horizontal_derivatives(u, dx_e=dx_e, dx_n=dx_n, dy_e=dy_e, dy_n=dy_n, J=J, land_mask=land_mask)
-    dv_e, _ = horizontal_derivatives(v, dx_e=dx_e, dx_n=dx_n, dy_e=dy_e, dy_n=dy_n, J=J, land_mask=land_mask)
+    _, du_y = horizontal_derivatives(u, dx=dx, dy=dy, land_mask=land_mask)
+    dv_x, _ = horizontal_derivatives(v, dx=dx, dy=dy, land_mask=land_mask)
 
-    vort = dv_e - du_n
+    vort = dv_x - du_y
 
     if normalize_by_coriolis:
         f = coriolis_factor(lat_t)
@@ -282,14 +282,14 @@ def strain_rate(
     strain_rate : Float[jax.Array, "y x"]
         The strain rate magnitude on the T grid, normalized by the Coriolis factor if ``normalize_by_coriolis=True``
     """
-    u, v, lat_t, lon_t, dx_e, dx_n, dy_e, dy_n, J, land_mask = setup_kinematics(
+    u, v, lat_t, lon_t, dx, dy, land_mask = setup_kinematics(
         u, v, lat_t, lon_t, lat_u, lon_u, lat_v, lon_v, land_mask, uv_on_t
     )
 
-    du_e, du_n = horizontal_derivatives(u, dx_e=dx_e, dx_n=dx_n, dy_e=dy_e, dy_n=dy_n, J=J, land_mask=land_mask)
-    dv_e, dv_n = horizontal_derivatives(v, dx_e=dx_e, dx_n=dx_n, dy_e=dy_e, dy_n=dy_n, J=J, land_mask=land_mask)
+    du_x, du_y = horizontal_derivatives(u, dx=dx, dy=dy, land_mask=land_mask)
+    dv_x, dv_y = horizontal_derivatives(v, dx=dx, dy=dy, land_mask=land_mask)
 
-    strain = jnp.sqrt((du_e - dv_n) ** 2 + (dv_e + du_n) ** 2)
+    strain = jnp.sqrt((du_x - dv_y) ** 2 + (dv_x + du_y) ** 2)
 
     if normalize_by_coriolis:
         f = coriolis_factor(lat_t)
@@ -366,34 +366,27 @@ def radius_of_curvature(
     rc : Float[jax.Array, "y x"]
         The radius of curvature of the velocity field in meters, on the T grid
     """
-    u, v, lat_t, lon_t, dx_e, dx_n, dy_e, dy_n, J, land_mask = setup_kinematics(
+    u, v, lat_t, lon_t, dx, dy, land_mask = setup_kinematics(
         u, v, lat_t, lon_t, lat_u, lon_u, lat_v, lon_v, land_mask, uv_on_t
     )
 
-    return _radius_of_curvature(u, v, dx_e, dx_n, dy_e, dy_n, J, land_mask)
+    return _radius_of_curvature(u, v, dx, dy, land_mask)
 
 
 def _radius_of_curvature(
     u_t: Float[jax.Array, "y x"],
     v_t: Float[jax.Array, "y x"],
-    dx_e_t: Float[jax.Array, "y x"],
-    dx_n_t: Float[jax.Array, "y x"],
-    dy_e_t: Float[jax.Array, "y x"],
-    dy_n_t: Float[jax.Array, "y x"],
-    J_t: Float[jax.Array, "y x"],
+    dx_t: Float[jax.Array, "y x"],
+    dy_t: Float[jax.Array, "y x"],
     land_mask: Float[jax.Array, "y x"]
 ) -> Float[jax.Array, "y x"]:
     V_t = magnitude(u_t, v_t, land_mask, uv_on_t=True)
 
-    du_e_t, du_n_t = horizontal_derivatives(
-        u_t, dx_e=dx_e_t, dx_n=dx_n_t, dy_e=dy_e_t, dy_n=dy_n_t, J=J_t, land_mask=land_mask
-    )
-    dv_e_t, dv_n_t = horizontal_derivatives(
-        v_t, dx_e=dx_e_t, dx_n=dx_n_t, dy_e=dy_e_t, dy_n=dy_n_t, J=J_t, land_mask=land_mask
-    )
+    du_x_t, du_y_t = horizontal_derivatives(u_t, dx=dx_t, dy=dy_t, land_mask=land_mask)
+    dv_x_t, dv_y_t = horizontal_derivatives(v_t, dx=dx_t, dy=dy_t, land_mask=land_mask)
 
     numerator = V_t ** 3
-    denominator = u_t ** 2 * dv_e_t - v_t ** 2 * du_n_t - u_t * v_t * (du_e_t - dv_n_t)
+    denominator = u_t ** 2 * dv_x_t - v_t ** 2 * du_y_t - u_t * v_t * (du_x_t - dv_y_t)
     r = numerator / denominator
 
     return r

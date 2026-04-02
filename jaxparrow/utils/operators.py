@@ -84,7 +84,6 @@ def interpolation(
 def derivative(
     field: Float[jax.Array, "y x"],
     axis: Literal[0, 1],
-    padding: Literal["left", "right"],
     land_mask: Float[jax.Array, "y x"] = None,
 ) -> Float[jax.Array, "y x"]:
     """
@@ -107,13 +106,6 @@ def derivative(
         Field to differentiate
     axis : Literal[0, 1]
         Axis along which interpolation is performed
-    padding : Literal["left", "right"]
-        Padding direction.
-        For example, following NEMO convention,
-        interpolating from U to T points requires a `left` padding
-        (the midpoint between $U_i$ and $U_{i+1}$ corresponds to $T_{i+1}$),
-        and interpolating from T to U points a `right` padding
-        (the midpoint between $T_i$ and $T_{i+1}$ corresponds to $U_i$)
     land_mask : Float[jax.Array, "y x"], optional
         Mask indicating the land domain where extrapolation should be applied.
         `False`/`0` indicates ocean cells, `True`/`1` indicates land cells.
@@ -146,11 +138,7 @@ def derivative(
 
     # Open boundary condition at domain edges: ∂²f/∂x² = 0
     # The boundary derivative equals the nearest interior derivative
-    df = lax.cond(
-        padding == "left",
-        lambda: jnp.concatenate([df[..., 0:1], df], axis=-1),
-        lambda: jnp.concatenate([df, df[..., -1:]], axis=-1)
-    )
+    df = jnp.concatenate([df, df[..., -1:]], axis=-1)
 
     df = jnp.moveaxis(df, -1, axis)
 
@@ -164,18 +152,15 @@ def horizontal_derivatives(
     field: Float[jax.Array, "y x"],
     lat: Float[jax.Array, "y x"] = None,
     lon: Float[jax.Array, "y x"] = None,
-    dx_e: Float[jax.Array, "y x"] = None,
-    dx_n: Float[jax.Array, "y x"] = None,
-    dy_e: Float[jax.Array, "y x"] = None,
-    dy_n: Float[jax.Array, "y x"] = None,
-    J: Float[jax.Array, "y x"] = None,
+    dx: Float[jax.Array, "y x"] = None,
+    dy: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None,
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
     """
-    Computes the horizontal derivatives of a ``field`` defined on a curvilinear or rectilinear grid, 
+    Computes the horizontal derivatives of a ``field`` defined on an orthogonal grid, 
     using finite differences and applying an open boundary condition at domain edges and land/NaN boundaries.
 
-    Horizontal derivatives are returned in the same grid as the input field.
+    Horizontal derivatives are returned on the same grid as the input field, and in the grid coordinates.
 
     Parameters
     ----------
@@ -184,29 +169,17 @@ def horizontal_derivatives(
     lat : Float[jax.Array, "y x"], optional
         Latitude grid corresponding to the field
 
-        Defaults to `None`, in which case ``dx_e``, ``dx_n``, ``dy_e``, ``dy_n`` and ``J`` must be provided
+        Defaults to `None`, in which case ``dx`` and ``dy`` must be provided
     lon : Float[jax.Array, "y x"], optional
         Longitude grid corresponding to the field
 
-        Defaults to `None`, in which case ``dx_e``, ``dx_n``, ``dy_e``, ``dy_n`` and ``J`` must be provided
-    dx_e : Float[jax.Array, "y x"], optional
+        Defaults to `None`, in which case ``dx`` and ``dy`` must be provided
+    dx : Float[jax.Array, "y x"], optional
         Grid spacing in the eastward direction (i.e. along axis=1)
 
         Defaults to `None`, in which case ``lat`` and ``lon`` must be provided
-    dx_n : Float[jax.Array, "y x"], optional
-        Grid spacing in the northward direction (i.e. along axis=0)
-
-        Defaults to `None`, in which case ``lat`` and ``lon`` must be provided
-    dy_e : Float[jax.Array, "y x"], optional
-        Grid spacing in the eastward direction (i.e. along axis=1)
-
-        Defaults to `None`, in which case ``lat`` and ``lon`` must be provided
-    dy_n : Float[jax.Array, "y x"], optional
-        Grid spacing in the northward direction (i.e. along axis=0)
-
-        Defaults to `None`, in which case ``lat`` and ``lon`` must be provided
-    J : Float[jax.Array, "y x"], optional
-        Jacobian of the transformation from grid to geographic coordinates
+    dy : Float[jax.Array, "y x"], optional
+        Grid spacing in the northward direction (i.e. along axis=1)
 
         Defaults to `None`, in which case ``lat`` and ``lon`` must be provided
     land_mask : Float[jax.Array, "y x"], optional
@@ -223,22 +196,22 @@ def horizontal_derivatives(
     df_n : Float[jax.Array, "y x"]
         Northward derivative of the field, on the same grid as the input field
     """
-    if dx_e is None or dx_n is None or dy_e is None or dy_n is None or J is None:
+    if dx is None or dy is None:
         if lat is None or lon is None:
-            raise ValueError("Either lat/lon or dx_e/dx_n/dy_e/dy_n/J must be provided")
-        from .geometry import grid_metrics
-        dx_e, dx_n, dy_e, dy_n, J = grid_metrics(lat, lon)
+            raise ValueError("Either lat/lon or dx/dy must be provided")
+        from .geometry import grid_spacing
+        dx, dy = grid_spacing(lat, lon)
 
     # compute derivatives in grid coordinates
-    df_x_s1 = derivative(field, axis=1, padding="right", land_mask=land_mask)
-    df_y_s0 = derivative(field, axis=0, padding="right", land_mask=land_mask)
+    df_x = derivative(field, axis=1, land_mask=land_mask)
+    df_y = derivative(field, axis=0, land_mask=land_mask)
 
-    # because of staggered grid, we need to interpolate
-    df_x = interpolation(df_x_s1, axis=1, padding="left", land_mask=land_mask)
-    df_y = interpolation(df_y_s0, axis=0, padding="left", land_mask=land_mask)
+    # interpolate from staggered grids to the T grid of the input field
+    df_x = interpolation(df_x, axis=1, padding="left", land_mask=land_mask)
+    df_y = interpolation(df_y, axis=0, padding="left", land_mask=land_mask)
 
-    # transform derivatives to geographic coordinates
-    df_e = (df_x * dy_n - df_y * dy_e) / J
-    df_n = (df_y * dx_e - df_x * dx_n) / J
+    # scale derivatives with grid spacing to get physical derivatives
+    df_x /= dx
+    df_y /= dy
 
-    return df_e, df_n
+    return df_x, df_y

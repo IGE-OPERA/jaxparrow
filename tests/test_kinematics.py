@@ -140,7 +140,7 @@ class TestSetupKinematics:
         u = jnp.ones_like(lat) * 0.1
         v = jnp.ones_like(lat) * 0.1
         result = setup_kinematics(u, v, lat_t=lat, lon_t=lon, land_mask=mask)
-        assert len(result) == 10
+        assert len(result) == 7
 
     def test_raises_without_grids(self):
         u = jnp.ones((3, 3))
@@ -155,7 +155,7 @@ class TestSetupKinematics:
         u = jnp.ones_like(lat) * 0.1
         v = jnp.ones_like(lat) * 0.1
         result = setup_kinematics(u, v, lat_u=lat_u, lon_u=lon_u, land_mask=mask)
-        assert len(result) == 10
+        assert len(result) == 7
         # lat_t and lon_t should have been inferred
         assert result[2].shape == lat.shape  # lat_t
         assert result[3].shape == lon.shape  # lon_t
@@ -165,7 +165,7 @@ class TestSetupKinematics:
         u = jnp.ones_like(lat) * 0.1
         v = jnp.ones_like(lat) * 0.1
         result = setup_kinematics(u, v, lat_t=lat, lon_t=lon, land_mask=mask, uv_on_t=False)
-        assert len(result) == 10
+        assert len(result) == 7
         # u and v should have been interpolated but still same shape
         assert result[0].shape == lat.shape
         assert result[1].shape == lat.shape
@@ -177,7 +177,7 @@ class TestSetupKinematics:
         u = jnp.ones_like(lat) * 0.1
         v = jnp.ones_like(lat) * 0.1
         result = setup_kinematics(u, v, lat_v=lat_v, lon_v=lon_v, land_mask=mask)
-        assert len(result) == 10
+        assert len(result) == 7
         assert result[2].shape == lat.shape
         assert result[3].shape == lon.shape
 

@@ -6,6 +6,19 @@ from jaxparrow.utils.geometry import coriolis_factor, GRAVITY
 
 
 @pytest.fixture
+def small_curvilinear_grid():
+    """A 10x10 curvilinear grid: lat/lon grid with a small sinusoidal perturbation."""
+    lat_1d = jnp.linspace(35.5, 36.5, 10)
+    lon_1d = jnp.linspace(-5.0, -4.0, 10)
+    lon, lat = jnp.meshgrid(lon_1d, lat_1d)
+    # Add a small sinusoidal perturbation to make it curvilinear
+    lat = lat + 0.05 * jnp.sin(2 * jnp.pi * lon)
+    lon = lon + 0.05 * jnp.sin(2 * jnp.pi * lat)
+    land_mask = jnp.zeros_like(lat, dtype=bool)
+    return lat, lon, land_mask
+
+
+@pytest.fixture
 def small_grid():
     """A 10x10 lat/lon grid in the Alboran Sea with no land."""
     lat_1d = jnp.linspace(35.5, 36.5, 10)
