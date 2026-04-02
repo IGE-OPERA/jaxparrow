@@ -143,6 +143,7 @@ def minimization_based(
         if optim_kwargs is None:
             optim_kwargs = {"learning_rate": 0.005}
         optim = getattr(optax, optim)(**optim_kwargs)
+        optim = optax.chain(optax.clip(1.0), optim)  # Clip gradients to prevent instability
     elif not isinstance(optim, optax.GradientTransformation):
         raise TypeError(
             "optim should be an optax.GradientTransformation optimizer, or a string referring to such an optimizer."
