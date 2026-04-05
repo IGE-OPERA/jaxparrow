@@ -69,18 +69,69 @@ def grid_spacing(
     return dx, dy
 
 
+def _axis_bearing_to_angle(
+    lat: Float[jax.Array, "lat lon"],
+    lon: Float[jax.Array, "lat lon"],
+    axis: int
+) -> Float[jax.Array, "lat lon"]:
+    """Compute the angle (counterclockwise from east) of a grid axis direction."""
+    lat_rad = jnp.radians(lat)
+
+    if axis == 1:
+        # differences along axis=1 (i-direction, columns)
+        dlon = jnp.zeros_like(lon)
+        dlon = dlon.at[:, 1:-1].set(lon[:, 2:] - lon[:, :-2])
+        dlon = dlon.at[:, 0].set(lon[:, 1] - lon[:, 0])
+        dlon = dlon.at[:, -1].set(lon[:, -1] - lon[:, -2])
+
+        lat1_rad = jnp.zeros_like(lat_rad)
+        lat1_rad = lat1_rad.at[:, 1:-1].set(lat_rad[:, :-2])
+        lat1_rad = lat1_rad.at[:, 0].set(lat_rad[:, 0])
+        lat1_rad = lat1_rad.at[:, -1].set(lat_rad[:, -2])
+
+        lat2_rad = jnp.zeros_like(lat_rad)
+        lat2_rad = lat2_rad.at[:, 1:-1].set(lat_rad[:, 2:])
+        lat2_rad = lat2_rad.at[:, 0].set(lat_rad[:, 1])
+        lat2_rad = lat2_rad.at[:, -1].set(lat_rad[:, -1])
+    else:
+        # differences along axis=0 (j-direction, rows)
+        dlon = jnp.zeros_like(lon)
+        dlon = dlon.at[1:-1, :].set(lon[2:, :] - lon[:-2, :])
+        dlon = dlon.at[0, :].set(lon[1, :] - lon[0, :])
+        dlon = dlon.at[-1, :].set(lon[-1, :] - lon[-2, :])
+
+        lat1_rad = jnp.zeros_like(lat_rad)
+        lat1_rad = lat1_rad.at[1:-1, :].set(lat_rad[:-2, :])
+        lat1_rad = lat1_rad.at[0, :].set(lat_rad[0, :])
+        lat1_rad = lat1_rad.at[-1, :].set(lat_rad[-2, :])
+
+        lat2_rad = jnp.zeros_like(lat_rad)
+        lat2_rad = lat2_rad.at[1:-1, :].set(lat_rad[2:, :])
+        lat2_rad = lat2_rad.at[0, :].set(lat_rad[1, :])
+        lat2_rad = lat2_rad.at[-1, :].set(lat_rad[-1, :])
+
+    dlon = (dlon + 180.0) % 360.0 - 180.0
+    dlon_rad = jnp.radians(dlon)
+
+    x = jnp.sin(dlon_rad) * jnp.cos(lat2_rad)
+    y = jnp.cos(lat1_rad) * jnp.sin(lat2_rad) - jnp.sin(lat1_rad) * jnp.cos(lat2_rad) * jnp.cos(dlon_rad)
+    bearing = jnp.arctan2(x, y)  # clockwise from north
+
+    # Convert to angle counterclockwise from east, wrapped to [-pi, pi]
+    angle = jnp.pi / 2 - bearing
+    return ((angle + jnp.pi) % (2 * jnp.pi)) - jnp.pi
+
+
 def compute_grid_angle(
     lat: Float[jax.Array, "lat lon"],
     lon: Float[jax.Array, "lat lon"]
-) -> Float[jax.Array, "lat lon"]:
+) -> tuple[Float[jax.Array, "lat lon"], Float[jax.Array, "lat lon"]]:
     """
-    Computes the local angle of the grid i-axis (axis=1) relative to geographic east.
+    Computes the local angles of both grid axes relative to geographic east.
 
     For curvilinear grids (e.g., SWOT swaths, tripolar grids), the grid axes are not aligned
-    with geographic east-west/north-south directions. This function computes the rotation angle
-    needed to transform gradients from grid coordinates to geographic coordinates.
-
-    The angle is measured counterclockwise from geographic east to the grid i-direction.
+    with geographic east-west/north-south directions. This function computes the rotation angles
+    needed to transform velocity components between grid coordinates and geographic coordinates.
 
     Parameters
     ----------
@@ -91,74 +142,54 @@ def compute_grid_angle(
 
     Returns
     -------
-    angle : Float[jax.Array, "lat lon"]
-        Rotation angle in radians, measured counterclockwise from geographic east
-        to the grid i-direction. Range is [-pi, pi].
+    angle_i : Float[jax.Array, "lat lon"]
+        Angle of the grid i-axis (axis=1) relative to geographic east, in radians,
+        measured counterclockwise. Range is [-pi, pi].
+    angle_j : Float[jax.Array, "lat lon"]
+        Angle of the grid j-axis (axis=0) relative to geographic east, in radians,
+        measured counterclockwise. Range is [-pi, pi].
 
     Notes
     -----
-    The angle is computed using the initial bearing formula between adjacent grid points
-    along the i-axis (axis=1). The formula computes the azimuth from north (clockwise positive),
-    which is then converted to angle from east (counterclockwise positive).
+    Both angles are computed using the initial bearing formula between adjacent grid points.
+    For a standard rectilinear lat/lon grid: ``angle_i ≈ 0`` (i-axis ≈ east) and
+    ``angle_j ≈ π/2`` (j-axis ≈ north).
 
-    For orthogonal grids, the j-axis direction is at angle + pi/2.
+    For ascending SWOT passes (satellite heading north), ``angle_j > 0``.
+    For descending SWOT passes (satellite heading south, rows increasing southward),
+    ``angle_j < 0``, making the grid left-handed. The rotation functions
+    :func:`rotate_to_geographic` and :func:`rotate_to_grid` handle both cases correctly.
     """
-    # Use central differences where possible, forward/backward at boundaries
-    lat_rad = jnp.radians(lat)
-
-    # Compute differences in longitude (handling wraparound)
-    dlon = jnp.zeros_like(lon)
-    dlon = dlon.at[:, 1:-1].set(lon[:, 2:] - lon[:, :-2])  # central diff
-    dlon = dlon.at[:, 0].set(lon[:, 1] - lon[:, 0])  # forward diff at left
-    dlon = dlon.at[:, -1].set(lon[:, -1] - lon[:, -2])  # backward diff at right
-
-    # Normalize to [-180, 180]
-    dlon = (dlon + 180.0) % 360.0 - 180.0
-    dlon_rad = jnp.radians(dlon)
-
-    # Compute latitude at neighboring points for bearing calculation
-    lat1_rad = jnp.zeros_like(lat_rad)
-    lat1_rad = lat1_rad.at[:, 1:-1].set(lat_rad[:, :-2])
-    lat1_rad = lat1_rad.at[:, 0].set(lat_rad[:, 0])
-    lat1_rad = lat1_rad.at[:, -1].set(lat_rad[:, -2])
-
-    lat2_rad = jnp.zeros_like(lat_rad)
-    lat2_rad = lat2_rad.at[:, 1:-1].set(lat_rad[:, 2:])
-    lat2_rad = lat2_rad.at[:, 0].set(lat_rad[:, 1])
-    lat2_rad = lat2_rad.at[:, -1].set(lat_rad[:, -1])
-
-    # Initial bearing formula: bearing from point 1 to point 2
-    # bearing = atan2(sin(dlon)*cos(lat2), cos(lat1)*sin(lat2) - sin(lat1)*cos(lat2)*cos(dlon))
-    # This gives bearing measured clockwise from north
-    x = jnp.sin(dlon_rad) * jnp.cos(lat2_rad)
-    y = jnp.cos(lat1_rad) * jnp.sin(lat2_rad) - jnp.sin(lat1_rad) * jnp.cos(lat2_rad) * jnp.cos(dlon_rad)
-    bearing = jnp.arctan2(x, y)  # radians, clockwise from north
-
-    # Convert bearing (clockwise from north) to angle (counterclockwise from east)
-    # If bearing = 0 (north), angle = pi/2
-    # If bearing = pi/2 (east), angle = 0
-    # angle = pi/2 - bearing
-    angle = jnp.pi / 2 - bearing
-
-    return angle
+    angle_i = _axis_bearing_to_angle(lat, lon, axis=1)
+    angle_j = _axis_bearing_to_angle(lat, lon, axis=0)
+    return angle_i, angle_j
 
 
 def rotate_to_geographic(
-    u: Float[jax.Array, "y x"], 
-    v: Float[jax.Array, "y x"], 
-    grid_angle: Float[jax.Array, "y x"]
+    u: Float[jax.Array, "y x"],
+    v: Float[jax.Array, "y x"],
+    angle_i: Float[jax.Array, "y x"],
+    angle_j: Float[jax.Array, "y x"]
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
     """
     Rotates velocity components from grid coordinates to geographic coordinates (eastward and northward components).
 
+    Uses the full 2-column rotation matrix defined by the actual directions of both grid axes,
+    which correctly handles right-handed grids (ascending passes) and left-handed grids
+    (descending passes where rows increase southward).
+
     Parameters
     ----------
     u : Float[jax.Array, "y x"]
-        Velocity component along the grid x-axis
+        Velocity component along the grid i-axis (axis=1)
     v : Float[jax.Array, "y x"]
-        Velocity component along the grid y-axis
-    grid_angle : Float[jax.Array, "y x"]
-        Angle between the grid x-axis and the eastward direction, in radians. Positive values indicate a counter-clockwise rotation from the grid x-axis to the eastward direction.
+        Velocity component along the grid j-axis (axis=0)
+    angle_i : Float[jax.Array, "y x"]
+        Angle of the grid i-axis (axis=1) relative to geographic east, in radians
+        (counterclockwise positive). Typically obtained from :func:`compute_grid_angle`.
+    angle_j : Float[jax.Array, "y x"]
+        Angle of the grid j-axis (axis=0) relative to geographic east, in radians
+        (counterclockwise positive). Typically obtained from :func:`compute_grid_angle`.
 
     Returns
     -------
@@ -167,11 +198,16 @@ def rotate_to_geographic(
     v_north : Float[jax.Array, "y x"]
         Northward velocity component
     """
-    cos_theta = jnp.cos(grid_angle)
-    sin_theta = jnp.sin(grid_angle)
+    cos_i = jnp.cos(angle_i)
+    sin_i = jnp.sin(angle_i)
+    cos_j = jnp.cos(angle_j)
+    sin_j = jnp.sin(angle_j)
 
-    u_east = u * cos_theta - v * sin_theta
-    v_north = u * sin_theta + v * cos_theta
+    # det = sin(angle_j - angle_i): +1 for right-handed (ascending), -1 for left-handed (descending)
+    det = cos_i * sin_j - sin_i * cos_j
+
+    u_east = (u * cos_i + v * cos_j) / det
+    v_north = (u * sin_i + v * sin_j) / det
 
     return u_east, v_north
 
@@ -179,7 +215,8 @@ def rotate_to_geographic(
 def rotate_to_grid(
     u: Float[jax.Array, "y x"],
     v: Float[jax.Array, "y x"],
-    grid_angle: Float[jax.Array, "y x"]
+    angle_i: Float[jax.Array, "y x"],
+    angle_j: Float[jax.Array, "y x"]
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
     """
     Rotates velocity components from geographic coordinates (eastward and northward) to grid coordinates.
@@ -192,21 +229,27 @@ def rotate_to_grid(
         Eastward velocity component
     v : Float[jax.Array, "y x"]
         Northward velocity component
-    grid_angle : Float[jax.Array, "y x"]
-        Angle between the grid x-axis and the eastward direction, in radians. Positive values indicate a counter-clockwise rotation from the grid x-axis to the eastward direction.
+    angle_i : Float[jax.Array, "y x"]
+        Angle of the grid i-axis (axis=1) relative to geographic east, in radians
+        (counterclockwise positive). Typically obtained from :func:`compute_grid_angle`.
+    angle_j : Float[jax.Array, "y x"]
+        Angle of the grid j-axis (axis=0) relative to geographic east, in radians
+        (counterclockwise positive). Typically obtained from :func:`compute_grid_angle`.
 
     Returns
     -------
     u_grid : Float[jax.Array, "y x"]
-        Velocity component along the grid x-axis
+        Velocity component along the grid i-axis (axis=1)
     v_grid : Float[jax.Array, "y x"]
-        Velocity component along the grid y-axis
+        Velocity component along the grid j-axis (axis=0)
     """
-    cos_theta = jnp.cos(grid_angle)
-    sin_theta = jnp.sin(grid_angle)
+    cos_i = jnp.cos(angle_i)
+    sin_i = jnp.sin(angle_i)
+    cos_j = jnp.cos(angle_j)
+    sin_j = jnp.sin(angle_j)
 
-    u_grid = u * cos_theta + v * sin_theta
-    v_grid = -u * sin_theta + v * cos_theta
+    u_grid = u * sin_j - v * cos_j
+    v_grid = -u * sin_i + v * cos_i
 
     return u_grid, v_grid
 

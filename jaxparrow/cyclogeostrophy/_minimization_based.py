@@ -40,11 +40,11 @@ def minimization_based(
 
     There are two modes of operation:
 
-    1. **SSH mode**: Provide ``lat_t``, ``lon_t``, ``ssh_t`` (and optionally ``mask``).
+    1. **SSH mode**: Provide ``lat_t``, ``lon_t``, ``ssh_t`` (and optionally ``land_mask``).
        Geostrophic velocities will be computed from SSH.
 
     2. **Geostrophic mode**: Provide ``lat_t``, ``lon_t``, ``ug_t``, ``vg_t``
-       (and optionally ``mask``). Geostrophic velocities are provided on the T grid
+       (and optionally ``land_mask``). Geostrophic velocities are provided on the T grid
        and will be interpolated to U/V grids internally.
 
     Parameters

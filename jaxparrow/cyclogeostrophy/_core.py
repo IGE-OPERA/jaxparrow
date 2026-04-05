@@ -22,7 +22,8 @@ class CyclogeostrophySetup(NamedTuple):
     dy_t: Float[jax.Array, "y x"]
     coriolis_factor_t: Float[jax.Array, "y x"]
     is_grid_rectilinear: bool
-    grid_angle: Float[jax.Array, "y x"]
+    grid_angle_i: Float[jax.Array, "y x"]
+    grid_angle_j: Float[jax.Array, "y x"]
 
 
 class CyclogeostrophyResult(NamedTuple):
@@ -70,17 +71,17 @@ def setup_cyclogeostrophy(
     # Check if geostrophic velocities are provided directly
     use_geos_directly = ug_t is not None and vg_t is not None
 
-    grid_angle = geometry.compute_grid_angle(lat_t, lon_t)
+    grid_angle_i, grid_angle_j = geometry.compute_grid_angle(lat_t, lon_t)
     if is_grid_rectilinear is None:
-        # determine if the grid is rectilinear by checking the grid angle
-        is_grid_rectilinear = jnp.all(jnp.abs(grid_angle) < 1e-3)
+        # determine if the grid is rectilinear by checking the i-axis angle
+        is_grid_rectilinear = jnp.all(jnp.abs(grid_angle_i) < 1e-3)
 
     if use_geos_directly:
         land_mask = sanitize.init_land_mask(ug_t, land_mask)
 
         if not is_grid_rectilinear:
             # rotate the input velocities to the grid coordinates
-            ug_t, vg_t = geometry.rotate_to_grid(ug_t, vg_t, grid_angle)
+            ug_t, vg_t = geometry.rotate_to_grid(ug_t, vg_t, grid_angle_i, grid_angle_j)
     else:
         # SSH-based computation
         if ssh_t is None:
@@ -88,7 +89,7 @@ def setup_cyclogeostrophy(
                 "Either provide ssh_t to compute geostrophic velocities from SSH, "
                 "or provide ug_t, vg_t directly on the T grid."
             )
-        
+
         land_mask = sanitize.init_land_mask(ssh_t, land_mask)
         ug_t, vg_t = geostrophy(ssh_t, lat_t, lon_t, land_mask, rotate_to_geographic=False)
 
@@ -96,13 +97,14 @@ def setup_cyclogeostrophy(
     f = geometry.coriolis_factor(lat_t)
 
     return CyclogeostrophySetup(
-        lat_t=lat_t, lon_t=lon_t, 
-        land_mask=land_mask, 
-        ug_t=ug_t, vg_t=vg_t, 
-        dx_t=dx, dy_t=dy, 
-        coriolis_factor_t=f, 
+        lat_t=lat_t, lon_t=lon_t,
+        land_mask=land_mask,
+        ug_t=ug_t, vg_t=vg_t,
+        dx_t=dx, dy_t=dy,
+        coriolis_factor_t=f,
         is_grid_rectilinear=is_grid_rectilinear,
-        grid_angle=grid_angle
+        grid_angle_i=grid_angle_i,
+        grid_angle_j=grid_angle_j,
     )
 
 
@@ -128,9 +130,9 @@ def assemble_result(
 
     if rotate_to_geographic:
         if not setup.is_grid_rectilinear:
-            ucg_t, vcg_t = geometry.rotate_to_geographic(ucg_t, vcg_t, setup.grid_angle)
+            ucg_t, vcg_t = geometry.rotate_to_geographic(ucg_t, vcg_t, setup.grid_angle_i, setup.grid_angle_j)
             if ug_out is not None and vg_out is not None:
-                ug_out, vg_out = geometry.rotate_to_geographic(ug_out, vg_out, setup.grid_angle)
+                ug_out, vg_out = geometry.rotate_to_geographic(ug_out, vg_out, setup.grid_angle_i, setup.grid_angle_j)
 
     return CyclogeostrophyResult(
         ucg=ucg_t,
