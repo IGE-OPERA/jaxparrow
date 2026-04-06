@@ -155,10 +155,10 @@ def compute_grid_angle(
     For a standard rectilinear lat/lon grid: ``angle_i ≈ 0`` (i-axis ≈ east) and
     ``angle_j ≈ π/2`` (j-axis ≈ north).
 
-    For ascending SWOT passes (satellite heading north), ``angle_j > 0``.
-    For descending SWOT passes (satellite heading south, rows increasing southward),
-    ``angle_j < 0``, making the grid left-handed. The rotation functions
-    :func:`rotate_to_geographic` and :func:`rotate_to_grid` handle both cases correctly.
+    For grids where the axes are not orthogonal in the geographic sense, or where
+    ``angle_j - angle_i ≠ π/2`` (e.g. non-orthogonal or left-handed grids), the rotation
+    functions :func:`rotate_to_geographic` and :func:`rotate_to_grid` handle these cases
+    correctly via the determinant ``det = sin(angle_j - angle_i)``.
     """
     angle_i = _axis_bearing_to_angle(lat, lon, axis=1)
     angle_j = _axis_bearing_to_angle(lat, lon, axis=0)
@@ -175,8 +175,7 @@ def rotate_to_geographic(
     Rotates velocity components from grid coordinates to geographic coordinates (eastward and northward components).
 
     Uses the full 2-column rotation matrix defined by the actual directions of both grid axes,
-    which correctly handles right-handed grids (ascending passes) and left-handed grids
-    (descending passes where rows increase southward).
+    correctly handling any grid orientation including non-orthogonal or left-handed grids.
 
     Parameters
     ----------
@@ -203,7 +202,7 @@ def rotate_to_geographic(
     cos_j = jnp.cos(angle_j)
     sin_j = jnp.sin(angle_j)
 
-    # det = sin(angle_j - angle_i): +1 for right-handed (ascending), -1 for left-handed (descending)
+    # det = sin(angle_j - angle_i): +1 for right-handed grids, -1 for left-handed grids
     det = cos_i * sin_j - sin_i * cos_j
 
     u_east = (u * cos_i + v * cos_j) / det

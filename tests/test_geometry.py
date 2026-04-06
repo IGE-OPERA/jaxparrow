@@ -79,8 +79,8 @@ class TestRotateToGeographic:
         assert jnp.allclose(vn, u, atol=1e-7)
 
     def test_left_handed_roundtrip(self):
-        # Roundtrip through rotate_to_grid then rotate_to_geographic must recover original geographic velocity
-        # for a descending pass (left-handed grid: angle_i=0, angle_j=-pi/2)
+        # Roundtrip through rotate_to_grid then rotate_to_geographic must recover original
+        # geographic velocity for a left-handed grid (angle_i=0, angle_j=-pi/2)
         from jaxparrow.utils.geometry import rotate_to_grid
         u_geo = jnp.ones((2, 2))
         v_geo = jnp.zeros((2, 2))
@@ -92,7 +92,7 @@ class TestRotateToGeographic:
         assert jnp.allclose(vn, v_geo, atol=1e-6)
 
     def test_left_handed_u_sign(self):
-        # Descending grid: angle_i=0 (east), angle_j=-pi/2 (south).
+        # Left-handed grid: angle_i=0 (east), angle_j=-pi/2 (south).
         # ug_t = 1 means _geostrophy computed -g/f * deta_y = 1, where
         # deta_y = ê_j · ∇η = -∂η_n (j-axis points south), so ∂η_n = f/g.
         # Correct u_east = -g/f * ∂η_n = -1.
@@ -168,13 +168,13 @@ class TestComputeGridAngle:
         assert (angle_j >= -jnp.pi).all()
         assert (angle_j <= jnp.pi).all()
 
-    def test_descending_det_is_minus_one(self, small_grid):
+    def test_left_handed_grid_det_is_minus_one(self, small_grid):
         lat, lon, _ = small_grid
-        # Flip row order to simulate a descending pass (rows increasing southward)
-        lat_desc = lat[::-1, :]
-        lon_desc = lon[::-1, :]
-        angle_i, angle_j = compute_grid_angle(lat_desc, lon_desc)
-        # The key property: det = sin(angle_j - angle_i) ≈ -1 (left-handed grid)
+        # A left-handed grid: flip row order so j-axis points in the opposite direction
+        lat_flipped = lat[::-1, :]
+        lon_flipped = lon[::-1, :]
+        angle_i, angle_j = compute_grid_angle(lat_flipped, lon_flipped)
+        # det = sin(angle_j - angle_i) ≈ -1 for a left-handed grid
         det = jnp.cos(angle_i) * jnp.sin(angle_j) - jnp.sin(angle_i) * jnp.cos(angle_j)
         assert jnp.allclose(det, -1.0, atol=2e-3)
         # All angles must be in [-pi, pi]
@@ -197,7 +197,7 @@ class TestRotateToGrid:
         u = jnp.array([[1.0, 2.0], [3.0, 4.0]])
         v = jnp.array([[0.5, -0.5], [1.0, -1.0]])
         angle_i = jnp.full((2, 2), jnp.pi / 4)
-        angle_j = jnp.full((2, 2), jnp.pi / 4 - jnp.pi / 2)  # left-handed (descending)
+        angle_j = jnp.full((2, 2), jnp.pi / 4 - jnp.pi / 2)  # left-handed
         ue, vn = rotate_to_geographic(u, v, angle_i, angle_j)
         u_rec, v_rec = rotate_to_grid(ue, vn, angle_i, angle_j)
         assert jnp.allclose(u_rec, u, atol=1e-6)
