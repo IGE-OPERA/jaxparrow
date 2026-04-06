@@ -79,8 +79,8 @@ class TestGeostrophy:
         # Should differ for curvilinear grid
         assert not jnp.allclose(ug_geo, ug_grid) or not jnp.allclose(vg_geo, vg_grid)
         # Rotating grid-relative back to geo should recover geo
-        angle = compute_grid_angle(lat, lon)
-        ug_geo2, vg_geo2 = rotate_to_geographic(ug_grid, vg_grid, angle)
+        angle_i, angle_j = compute_grid_angle(lat, lon)
+        ug_geo2, vg_geo2 = rotate_to_geographic(ug_grid, vg_grid, angle_i, angle_j)
         assert jnp.allclose(ug_geo, ug_geo2, atol=1e-6)
         assert jnp.allclose(vg_geo, vg_geo2, atol=1e-6)
 

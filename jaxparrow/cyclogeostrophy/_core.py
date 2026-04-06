@@ -22,7 +22,8 @@ class CyclogeostrophySetup(NamedTuple):
     dy_t: Float[jax.Array, "y x"]
     coriolis_factor_t: Float[jax.Array, "y x"]
     is_grid_rectilinear: bool
-    grid_angle: Float[jax.Array, "y x"]
+    grid_angle_i: Float[jax.Array, "y x"]
+    grid_angle_j: Float[jax.Array, "y x"]
 
 
 class CyclogeostrophyResult(NamedTuple):
@@ -70,17 +71,17 @@ def setup_cyclogeostrophy(
     # Check if geostrophic velocities are provided directly
     use_geos_directly = ug_t is not None and vg_t is not None
 
-    grid_angle = geometry.compute_grid_angle(lat_t, lon_t)
+    grid_angle_i, grid_angle_j = geometry.compute_grid_angle(lat_t, lon_t)
     if is_grid_rectilinear is None:
-        # determine if the grid is rectilinear by checking the grid angle
-        is_grid_rectilinear = jnp.all(jnp.abs(grid_angle) < 1e-3)
+        # determine if the grid is rectilinear by checking the i-axis angle
+        is_grid_rectilinear = jnp.all(jnp.abs(grid_angle_i) < 1e-3)
 
     if use_geos_directly:
         land_mask = sanitize.init_land_mask(ug_t, land_mask)
 
         if not is_grid_rectilinear:
             # rotate the input velocities to the grid coordinates
-            ug_t, vg_t = geometry.rotate_to_grid(ug_t, vg_t, grid_angle)
+            ug_t, vg_t = geometry.rotate_to_grid(ug_t, vg_t, grid_angle_i, grid_angle_j)
     else:
         # SSH-based computation
         if ssh_t is None:
@@ -88,7 +89,7 @@ def setup_cyclogeostrophy(
                 "Either provide ssh_t to compute geostrophic velocities from SSH, "
                 "or provide ug_t, vg_t directly on the T grid."
             )
-        
+
         land_mask = sanitize.init_land_mask(ssh_t, land_mask)
         ug_t, vg_t = geostrophy(ssh_t, lat_t, lon_t, land_mask, rotate_to_geographic=False)
 
@@ -96,13 +97,14 @@ def setup_cyclogeostrophy(
     f = geometry.coriolis_factor(lat_t)
 
     return CyclogeostrophySetup(
-        lat_t=lat_t, lon_t=lon_t, 
-        land_mask=land_mask, 
-        ug_t=ug_t, vg_t=vg_t, 
-        dx_t=dx, dy_t=dy, 
-        coriolis_factor_t=f, 
+        lat_t=lat_t, lon_t=lon_t,
+        land_mask=land_mask,
+        ug_t=ug_t, vg_t=vg_t,
+        dx_t=dx, dy_t=dy,
+        coriolis_factor_t=f,
         is_grid_rectilinear=is_grid_rectilinear,
-        grid_angle=grid_angle
+        grid_angle_i=grid_angle_i,
+        grid_angle_j=grid_angle_j,
     )
 
 
@@ -128,9 +130,9 @@ def assemble_result(
 
     if rotate_to_geographic:
         if not setup.is_grid_rectilinear:
-            ucg_t, vcg_t = geometry.rotate_to_geographic(ucg_t, vcg_t, setup.grid_angle)
+            ucg_t, vcg_t = geometry.rotate_to_geographic(ucg_t, vcg_t, setup.grid_angle_i, setup.grid_angle_j)
             if ug_out is not None and vg_out is not None:
-                ug_out, vg_out = geometry.rotate_to_geographic(ug_out, vg_out, setup.grid_angle)
+                ug_out, vg_out = geometry.rotate_to_geographic(ug_out, vg_out, setup.grid_angle_i, setup.grid_angle_j)
 
     return CyclogeostrophyResult(
         ucg=ucg_t,
@@ -157,7 +159,8 @@ def cyclogeostrophic_loss(
     lat_v: Float[jax.Array, "y x"] = None,
     lon_v: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None,
-    uv_on_t: bool = True
+    uv_on_t: bool = True,
+    is_grid_rectilinear: bool | None = None,
 ) -> Float[jax.Array, ""]:
     """
     Computes the cyclogeostrophic imbalance loss (a scalar) from a geostrophic and a cyclogeostrophic velocity field.
@@ -211,13 +214,19 @@ def cyclogeostrophic_loss(
         (this is important when manipulating staggered grids)
         
         Defaults to `True`
+    is_grid_rectilinear : bool | None, optional
+        If `True`, the grid is assumed to be rectilinear and no rotation is applied to the input velocities. 
+        If `False`, the input velocities are rotated to grid coordinates before computing the imbalance.
+        If `None`, the grid type is inferred from the grid angles (if angles are close to zero, the grid is considered rectilinear).
+
+        Defaults to `None`
     Returns
     -------
     loss : Float[jax.Array, ""]
         Cyclogeostrophic imbalance loss
     """
     u_imbalance, v_imbalance = cyclogeostrophic_imbalance(
-        ug, vg, ucg, vcg, lat_t, lon_t, lat_u, lon_u, lat_v, lon_v, land_mask, uv_on_t
+        ug, vg, ucg, vcg, lat_t, lon_t, lat_u, lon_u, lat_v, lon_v, land_mask, uv_on_t, is_grid_rectilinear
     )
 
     return jnp.nansum(u_imbalance ** 2 + v_imbalance ** 2)
@@ -236,6 +245,7 @@ def cyclogeostrophic_imbalance(
     lon_v: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None,
     uv_on_t: bool = True,
+    is_grid_rectilinear: bool | None = None,
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
     """
     Computes the cyclogeostrophic imbalance field from a geostrophic and a cyclogeostrophic velocity field.
@@ -289,6 +299,12 @@ def cyclogeostrophic_imbalance(
         (this is important when manipulating staggered grids)
         
         Defaults to `True`
+    is_grid_rectilinear : bool | None, optional
+        If `True`, the grid is assumed to be rectilinear and no rotation is applied to the input velocities. 
+        If `False`, the input velocities are rotated to grid coordinates before computing the imbalance.
+        If `None`, the grid type is inferred from the grid angles (if angles are close to zero, the grid is considered rectilinear).
+
+        Defaults to `None`
 
     Returns
     -------
@@ -315,6 +331,20 @@ def cyclogeostrophic_imbalance(
             lon_t = operators.interpolation(lon_v, axis=0, padding="left", land_mask=land_mask)
         else:
             raise ValueError("Either lat_t and lon_t, or lat_u, lon_u, lat_v, and lon_v must be provided")
+        
+    grid_angle_i, grid_angle_j = None, None
+
+    if is_grid_rectilinear is None:
+        grid_angle_i, grid_angle_j = geometry.compute_grid_angle(lat_t, lon_t)
+        is_grid_rectilinear = jnp.all(jnp.abs(grid_angle_i) < 1e-3)
+
+    if not is_grid_rectilinear:
+        if grid_angle_i is None or grid_angle_j is None:
+            grid_angle_i, grid_angle_j = geometry.compute_grid_angle(lat_t, lon_t)
+
+        # rotate the input velocities to the grid coordinates
+        ug, vg = geometry.rotate_to_grid(ug, vg, grid_angle_i, grid_angle_j)
+        ucg, vcg = geometry.rotate_to_grid(ucg, vcg, grid_angle_i, grid_angle_j)
     
     # compute grid spacing once
     dx, dy = geometry.grid_spacing(lat_t, lon_t)

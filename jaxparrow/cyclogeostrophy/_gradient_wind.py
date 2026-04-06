@@ -25,7 +25,7 @@ def gradient_wind(
 
     There are two modes of operation:
 
-    1. **SSH mode**: Provide ``lat_t``, ``lon_t``, ``ssh_t`` (and optionally ``mask``).
+    1. **SSH mode**: Provide ``lat_t``, ``lon_t``, ``ssh_t`` (and optionally ``land_mask``).
        Geostrophic velocities will be computed from SSH.
 
     2. **Geostrophic mode**: Provide ``lat_t``, ``lon_t``, ``ug_t``, ``vg_t``

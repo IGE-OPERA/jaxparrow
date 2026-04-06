@@ -136,8 +136,8 @@ class TestFixedPoint:
         result_grid = fixed_point(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=False)
         # Should differ for curvilinear grid
         assert not jnp.allclose(result_geo.ucg, result_grid.ucg) or not jnp.allclose(result_geo.vcg, result_grid.vcg)
-        angle = compute_grid_angle(lat, lon)
-        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle)
+        angle_i, angle_j = compute_grid_angle(lat, lon)
+        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle_i, angle_j)
         assert jnp.allclose(result_geo.ucg, ucg_geo2, atol=1e-6)
         assert jnp.allclose(result_geo.vcg, vcg_geo2, atol=1e-6)
 
@@ -217,8 +217,8 @@ class TestGradientWind:
         result_grid = gradient_wind(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=False)
         # Should differ for curvilinear grid
         assert not jnp.allclose(result_geo.ucg, result_grid.ucg) or not jnp.allclose(result_geo.vcg, result_grid.vcg)
-        angle = compute_grid_angle(lat, lon)
-        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle)
+        angle_i, angle_j = compute_grid_angle(lat, lon)
+        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle_i, angle_j)
         assert jnp.allclose(result_geo.ucg, ucg_geo2, atol=1e-6)
         assert jnp.allclose(result_geo.vcg, vcg_geo2, atol=1e-6)
 
@@ -288,8 +288,8 @@ class TestMinimizationBased:
         result_grid = minimization_based(lat, lon, ssh_t=ssh, land_mask=mask, rotate_to_geographic=False, n_it=10)
         # Should differ for curvilinear grid
         assert not jnp.allclose(result_geo.ucg, result_grid.ucg) or not jnp.allclose(result_geo.vcg, result_grid.vcg)
-        angle = compute_grid_angle(lat, lon)
-        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle)
+        angle_i, angle_j = compute_grid_angle(lat, lon)
+        ucg_geo2, vcg_geo2 = rotate_to_geographic(result_grid.ucg, result_grid.vcg, angle_i, angle_j)
         assert jnp.allclose(result_geo.ucg, ucg_geo2, atol=1e-6)
         assert jnp.allclose(result_geo.vcg, vcg_geo2, atol=1e-6)
 

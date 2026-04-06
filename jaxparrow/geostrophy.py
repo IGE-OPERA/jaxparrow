@@ -64,16 +64,17 @@ def geostrophy(
     vg_t = sanitize.sanitize_data(vg_t, jnp.nan, land_mask)
 
     if rotate_to_geographic:
-        grid_angle = None
+        grid_angle_i = None
+        grid_angle_j = None
         if is_grid_rectilinear is None:
-            # determine if the grid is rectilinear by checking the grid angle
-            grid_angle = geometry.compute_grid_angle(lat_t, lon_t)
-            is_grid_rectilinear = jnp.all(jnp.abs(grid_angle) < 1e-3)
-        
+            # determine if the grid is rectilinear by checking the i-axis angle
+            grid_angle_i, grid_angle_j = geometry.compute_grid_angle(lat_t, lon_t)
+            is_grid_rectilinear = jnp.all(jnp.abs(grid_angle_i) < 1e-3)
+
         if not is_grid_rectilinear:
-            if grid_angle is None:
-                grid_angle = geometry.compute_grid_angle(lat_t, lon_t)
-            ug_t, vg_t = geometry.rotate_to_geographic(ug_t, vg_t, grid_angle)
+            if grid_angle_i is None:
+                grid_angle_i, grid_angle_j = geometry.compute_grid_angle(lat_t, lon_t)
+            ug_t, vg_t = geometry.rotate_to_geographic(ug_t, vg_t, grid_angle_i, grid_angle_j)
 
     return ug_t, vg_t
 
