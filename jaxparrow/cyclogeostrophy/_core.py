@@ -159,7 +159,8 @@ def cyclogeostrophic_loss(
     lat_v: Float[jax.Array, "y x"] = None,
     lon_v: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None,
-    uv_on_t: bool = True
+    uv_on_t: bool = True,
+    is_grid_rectilinear: bool | None = None,
 ) -> Float[jax.Array, ""]:
     """
     Computes the cyclogeostrophic imbalance loss (a scalar) from a geostrophic and a cyclogeostrophic velocity field.
@@ -213,13 +214,19 @@ def cyclogeostrophic_loss(
         (this is important when manipulating staggered grids)
         
         Defaults to `True`
+    is_grid_rectilinear : bool | None, optional
+        If `True`, the grid is assumed to be rectilinear and no rotation is applied to the input velocities. 
+        If `False`, the input velocities are rotated to grid coordinates before computing the imbalance.
+        If `None`, the grid type is inferred from the grid angles (if angles are close to zero, the grid is considered rectilinear).
+
+        Defaults to `None`
     Returns
     -------
     loss : Float[jax.Array, ""]
         Cyclogeostrophic imbalance loss
     """
     u_imbalance, v_imbalance = cyclogeostrophic_imbalance(
-        ug, vg, ucg, vcg, lat_t, lon_t, lat_u, lon_u, lat_v, lon_v, land_mask, uv_on_t
+        ug, vg, ucg, vcg, lat_t, lon_t, lat_u, lon_u, lat_v, lon_v, land_mask, uv_on_t, is_grid_rectilinear
     )
 
     return jnp.nansum(u_imbalance ** 2 + v_imbalance ** 2)
@@ -238,6 +245,7 @@ def cyclogeostrophic_imbalance(
     lon_v: Float[jax.Array, "y x"] = None,
     land_mask: Float[jax.Array, "y x"] = None,
     uv_on_t: bool = True,
+    is_grid_rectilinear: bool | None = None,
 ) -> tuple[Float[jax.Array, "y x"], Float[jax.Array, "y x"]]:
     """
     Computes the cyclogeostrophic imbalance field from a geostrophic and a cyclogeostrophic velocity field.
@@ -291,6 +299,12 @@ def cyclogeostrophic_imbalance(
         (this is important when manipulating staggered grids)
         
         Defaults to `True`
+    is_grid_rectilinear : bool | None, optional
+        If `True`, the grid is assumed to be rectilinear and no rotation is applied to the input velocities. 
+        If `False`, the input velocities are rotated to grid coordinates before computing the imbalance.
+        If `None`, the grid type is inferred from the grid angles (if angles are close to zero, the grid is considered rectilinear).
+
+        Defaults to `None`
 
     Returns
     -------
@@ -317,6 +331,20 @@ def cyclogeostrophic_imbalance(
             lon_t = operators.interpolation(lon_v, axis=0, padding="left", land_mask=land_mask)
         else:
             raise ValueError("Either lat_t and lon_t, or lat_u, lon_u, lat_v, and lon_v must be provided")
+        
+    grid_angle_i, grid_angle_j = None, None
+
+    if is_grid_rectilinear is None:
+        grid_angle_i, grid_angle_j = geometry.compute_grid_angle(lat_t, lon_t)
+        is_grid_rectilinear = jnp.all(jnp.abs(grid_angle_i) < 1e-3)
+
+    if not is_grid_rectilinear:
+        if grid_angle_i is None or grid_angle_j is None:
+            grid_angle_i, grid_angle_j = geometry.compute_grid_angle(lat_t, lon_t)
+
+        # rotate the input velocities to the grid coordinates
+        ug, vg = geometry.rotate_to_grid(ug, vg, grid_angle_i, grid_angle_j)
+        ucg, vcg = geometry.rotate_to_grid(ucg, vcg, grid_angle_i, grid_angle_j)
     
     # compute grid spacing once
     dx, dy = geometry.grid_spacing(lat_t, lon_t)
