@@ -74,7 +74,7 @@ vcg_3d = mb_result.vcg  # 3d jax.Array
 - add arbitrary regularization term when employing the [`minimization-based`](https://jaxparrow.readthedocs.io/en/latest/api/#jaxparrow.cyclogeostrophy.minimization_based) method, see the [regularization with SWOT data](https://jaxparrow.readthedocs.io/en/latest/examples/swot_regularization/) example notebook,
 - reconstruct geostrophic currents, see the [`geostrophy`](https://jaxparrow.readthedocs.io/en/latest/api/#jaxparrow.geostrophy.geostrophy) function,
 - compute some classical kinematics, see the [`kinematics`](https://jaxparrow.readthedocs.io/en/latest/api/#jaxparrow.utils.kinematics) module,
-- perform standard operations on the grid, see the [`operators`](https://jaxparrow.readthedocs.io/en/latest/api/#jaxparrow.utils.operators) module.
+- perform standard operations on the grid, see the [`operators`](https://jaxparrow.readthedocs.io/en/latest/api/#jaxparrow.utils.operators) and [`geometry`](https://jaxparrow.readthedocs.io/en/latest/api/#jaxparrow.utils.geometry) modules.
 
 Explore `jaxparrow` [documentation](https://jaxparrow.readthedocs.io/en/latest/) for more details, including the [API description](https://jaxparrow.readthedocs.io/en/latest/api/) and step-by-step examples in the form of notebooks.
 
