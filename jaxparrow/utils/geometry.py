@@ -157,8 +157,8 @@ def compute_grid_angle(
 
     For grids where the axes are not orthogonal in the geographic sense, or where
     ``angle_j - angle_i ≠ π/2`` (e.g. non-orthogonal or left-handed grids), the rotation
-    functions :func:`rotate_to_geographic` and :func:`rotate_to_grid` handle these cases
-    correctly via the determinant ``det = sin(angle_j - angle_i)``.
+    functions [`jaxparrow.utils.geometry.rotate_to_geographic`][] and [`jaxparrow.utils.geometry.rotate_to_grid`][] 
+    handle these cases correctly via the determinant ``det = sin(angle_j - angle_i)``.
     """
     angle_i = _axis_bearing_to_angle(lat, lon, axis=1)
     angle_j = _axis_bearing_to_angle(lat, lon, axis=0)
@@ -185,10 +185,10 @@ def rotate_to_geographic(
         Velocity component along the grid j-axis (axis=0)
     angle_i : Float[jax.Array, "y x"]
         Angle of the grid i-axis (axis=1) relative to geographic east, in radians
-        (counterclockwise positive). Typically obtained from :func:`compute_grid_angle`.
+        (counterclockwise positive). Typically obtained from [`jaxparrow.utils.geometry.compute_grid_angle`][].
     angle_j : Float[jax.Array, "y x"]
         Angle of the grid j-axis (axis=0) relative to geographic east, in radians
-        (counterclockwise positive). Typically obtained from :func:`compute_grid_angle`.
+        (counterclockwise positive). Typically obtained from [`jaxparrow.utils.geometry.compute_grid_angle`][].
 
     Returns
     -------
@@ -220,7 +220,7 @@ def rotate_to_grid(
     """
     Rotates velocity components from geographic coordinates (eastward and northward) to grid coordinates.
 
-    This is the inverse of :func:`rotate_to_geographic`.
+    This is the inverse of [`jaxparrow.utils.geometry.rotate_to_geographic`][].
 
     Parameters
     ----------
@@ -230,10 +230,10 @@ def rotate_to_grid(
         Northward velocity component
     angle_i : Float[jax.Array, "y x"]
         Angle of the grid i-axis (axis=1) relative to geographic east, in radians
-        (counterclockwise positive). Typically obtained from :func:`compute_grid_angle`.
+        (counterclockwise positive). Typically obtained from [`jaxparrow.utils.geometry.compute_grid_angle`][].
     angle_j : Float[jax.Array, "y x"]
         Angle of the grid j-axis (axis=0) relative to geographic east, in radians
-        (counterclockwise positive). Typically obtained from :func:`compute_grid_angle`.
+        (counterclockwise positive). Typically obtained from [`jaxparrow.utils.geometry.compute_grid_angle`][].
 
     Returns
     -------
